@@ -194,7 +194,9 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if menu_open:return
-	camera.handle_input(event)
+	var over_ui=get_viewport().gui_get_hovered_control()!=null
+	if not over_ui or (not event is InputEventPanGesture and not event is InputEventMagnifyGesture):
+		camera.handle_input(event)
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode==KEY_ESCAPE:
 			set_tool("inspect")

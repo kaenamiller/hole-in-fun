@@ -12,6 +12,9 @@ const MAX_SUBSTEP: float = 1.0
 ## durations are authored in real-world units and converted with this factor,
 ## so visible pacing scales directly with the player's speed multiplier.
 const SIM_RATE: float = 60.0
+## Base visual pace multiplier at 1x. Pure realtime walking is too slow to
+## finish rounds within the operating day, so 1x runs ~3x realtime.
+const BASE_PACE: float = 3.0
 const MAX_STROKES: int = 14
 const EVENT_KINDS: Array[String] = [
 	"open_day", "charity_scramble", "beginner_clinic", "club_championship",
@@ -1446,7 +1449,7 @@ func _move_person(person: Dictionary, dt: float, speed: float) -> bool:
 		person["blocked"] = true
 		return false
 	person["blocked"] = false
-	var distance_left: float = speed * dt * SIM_RATE
+	var distance_left: float = speed * dt * SIM_RATE * BASE_PACE
 	var index: int = int(person.get("route_index", 0))
 	while distance_left > 0.0 and index < route.size():
 		var target: Vector3 = route[index]
