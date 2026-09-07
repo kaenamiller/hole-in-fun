@@ -43,6 +43,8 @@ var panel: PanelContainer
 var body: VBoxContainer
 var header_label: Label
 var back_button: Button
+var panel_close_button: Button
+var panel_hidden: bool = false
 var cash_label: Label
 var cash_sub: Label
 var visitor_label: Label
@@ -63,6 +65,7 @@ var tool_label: Label
 var dynamic_label: Label
 var tab: String = "Terrain"
 var view: String = "tab"
+var _gradient_cache: Dictionary = {}
 var menu: Control
 var nav_buttons: Dictionary = {}
 var speed_buttons: Dictionary = {}
@@ -74,6 +77,7 @@ var bell_button: Button
 var gear_button: Button
 var pause_banner: Control
 var reports_overlay: Control
+var system_overlay: Control
 var overlay_option: OptionButton
 var overlay_legend_min: Label
 var overlay_legend_max: Label
@@ -94,6 +98,9 @@ var _progress_branch: String = "operations"
 var _money_view: String = "prices"
 var _reputation_view: String = "reputation"
 var _reports_view: String = "money"
+var _system_section: String = "save"
+var _settings_tab: String = "graphics"
+var _confirm_quit_desktop: bool = false
 var _expanded_sets: Dictionary = {}
 var _reviews_expanded: bool = false
 var _guest_list_expanded: bool = false
@@ -109,6 +116,8 @@ var _view_row: HBoxContainer
 var _ongoing_signature: String = ""
 var _rail_width: int = 70
 var _reports_body: VBoxContainer
+var _system_side: VBoxContainer
+var _system_content: VBoxContainer
 
 # ---------------------------------------------------------------- setup
 
@@ -446,7 +455,7 @@ func _build_header() -> void:
 	gear_button = button("⚙", func(): show_system(), time_cluster)
 	gear_button.custom_minimum_size = Vector2(40, 34)
 	gear_button.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	gear_button.tooltip_text = "Saves, settings, and help"
+	gear_button.tooltip_text = "Menu · save, settings, and quit"
 
 func _stat(parent: Node, key: String, caption: String, value: String) -> Label:
 	var v = VBoxContainer.new()
@@ -614,6 +623,9 @@ func _build_panel() -> void:
 	top.add_child(header_label)
 	back_button = small_button("‹ Back", func(): show_tab(tab), top)
 	back_button.visible = false
+	panel_close_button = small_button("✕", func(): _hide_panel(), top)
+	panel_close_button.custom_minimum_size = Vector2(28, 28)
+	panel_close_button.tooltip_text = "Hide the detail panel"
 	var scroll = ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -682,6 +694,8 @@ func _apply_layout() -> void:
 	_stat_boxes["rating"].visible = vs.x >= 1000.0
 	if is_instance_valid(reports_overlay):
 		_layout_reports_overlay()
+	if is_instance_valid(system_overlay):
+		_layout_system_overlay()
 
 # ---------------------------------------------------------------- toasts
 
@@ -783,12 +797,139 @@ func show_log() -> void:
 	_render()
 
 func show_system() -> void:
-	view = "system"
-	_render()
+	_close_reports()
+	var opening: bool = not is_instance_valid(system_overlay)
+	if opening:
+		_confirm_quit_desktop = false
+	_close_system()
+	system_overlay = Control.new()
+	system_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	system_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(system_overlay)
+	var shade = ColorRect.new()
+	shade.color = Color(0.06, 0.14, 0.10, 0.5)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	shade.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_close_system()
+	)
+	system_overlay.add_child(shade)
+	var card_panel = PanelContainer.new()
+	card_panel.name = "Card"
+	card_panel.add_theme_stylebox_override("panel", box(PAPER, 14, 18))
+	system_overlay.add_child(card_panel)
+	var outer = VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 10)
+	card_panel.add_child(outer)
+	var top = HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	outer.add_child(top)
+	top.add_child(label("Menu", 20, INK))
+	var top_spacer = Control.new()
+	top_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(top_spacer)
+	var close = small_button("✕", func(): _close_system(), top)
+	close.custom_minimum_size = Vector2(32, 28)
+	var columns = HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 14)
+	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(columns)
+	var side = VBoxContainer.new()
+	side.add_theme_constant_override("separation", 4)
+	side.custom_minimum_size.x = 150
+	columns.add_child(side)
+	_system_side = side
+	for pair in [["Save & Load", "save"], ["Settings", "settings"], ["Controls", "controls"], ["About", "about"]]:
+		var section_id: String = str(pair[1])
+		var nav_button = button(str(pair[0]), func(): _system_section = section_id; _confirm_quit_desktop = false; show_system(), side)
+		nav_button.set_meta("section_id", section_id)
+		nav_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var spacer = Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side.add_child(spacer)
+	var quit_title = button("Quit to Title", func(): _close_system(); show_menu(), side)
+	quit_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quit_title.tooltip_text = "Return to the title screen. Your resort keeps running."
+	var quit_desktop = Button.new()
+	quit_desktop.text = "Quit to Desktop"
+	quit_desktop.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	quit_desktop.custom_minimum_size.y = 34
+	quit_desktop.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quit_desktop.pressed.connect(func():
+		if _confirm_quit_desktop:
+			game.quit_to_desktop()
+		else:
+			_confirm_quit_desktop = true
+			show_system()
+	)
+	side.add_child(quit_desktop)
+	if _confirm_quit_desktop:
+		var confirm_row = HBoxContainer.new()
+		confirm_row.add_theme_constant_override("separation", 6)
+		side.add_child(confirm_row)
+		var confirm = small_button("Confirm quit", func(): game.quit_to_desktop(), confirm_row)
+		confirm.add_theme_stylebox_override("normal", box(ACCENT, 7, 8))
+		confirm.add_theme_color_override("font_color", PAPER)
+		small_button("Cancel", func(): _confirm_quit_desktop = false; show_system(), confirm_row)
+	var scroll = ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	columns.add_child(scroll)
+	_system_content = VBoxContainer.new()
+	_system_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_system_content.add_theme_constant_override("separation", 8)
+	scroll.add_child(_system_content)
+	_target = _system_content
+	_layout_system_overlay()
+	_render_system()
+
+func _layout_system_overlay() -> void:
+	if not is_instance_valid(system_overlay):
+		return
+	var card_panel: Control = system_overlay.get_node("Card")
+	var vs: Vector2 = root.size
+	var width: float = clampf(vs.x * 0.6, 560.0, 860.0)
+	var height: float = clampf(vs.y * 0.75, 460.0, 640.0)
+	card_panel.set_anchors_preset(Control.PRESET_CENTER)
+	card_panel.offset_left = -width * 0.5
+	card_panel.offset_right = width * 0.5
+	card_panel.offset_top = -height * 0.5
+	card_panel.offset_bottom = height * 0.5
+
+func _close_system() -> void:
+	if is_instance_valid(system_overlay):
+		system_overlay.queue_free()
+	system_overlay = null
+	_system_side = null
+	_system_content = null
+	_target = body
+
+func _render_system() -> void:
+	if not is_instance_valid(system_overlay) or not is_instance_valid(_system_content):
+		return
+	for child in _system_content.get_children():
+		child.queue_free()
+	for nav_child in _system_side.get_children():
+		if nav_child is Button and nav_child.has_meta("section_id"):
+			var active: bool = str(nav_child.get_meta("section_id")) == _system_section
+			nav_child.add_theme_stylebox_override("normal", box(INK if active else PAPER, 8, 8))
+			nav_child.add_theme_stylebox_override("hover", box(INK if active else CARD_HOVER, 8, 8))
+			nav_child.add_theme_color_override("font_color", PAPER if active else INK)
+			nav_child.add_theme_color_override("font_hover_color", PAPER if active else INK)
+	var previous_target = _target
+	_target = _system_content
+	match _system_section:
+		"save": _system_save_section()
+		"settings": _system_settings_section()
+		"controls": _system_controls_section()
+		"about": _system_about_section()
+	_target = previous_target
 
 func refresh_system_panel() -> void:
-	if view == "system":
-		show_system()
+	if is_instance_valid(system_overlay):
+		_render_system()
 
 func _update_quality_buttons(buttons: Dictionary) -> void:
 	var active: String = GraphicsSettings.preset_name(game.graphics.current.preset)
@@ -805,8 +946,18 @@ func refresh_view() -> void:
 		view = "tab"
 	_render()
 
+func _hide_panel() -> void:
+	panel_hidden = true
+	panel.visible = false
+
+func _show_panel() -> void:
+	panel_hidden = false
+	panel.visible = true
+
 func _render() -> void:
+	_show_panel()
 	for child in body.get_children():
+		body.remove_child(child)
 		child.queue_free()
 	dynamic_label = null
 	_live.clear()
@@ -814,6 +965,8 @@ func _render() -> void:
 	_target = body
 	if tab != "Reports" and is_instance_valid(reports_overlay):
 		_close_reports()
+	if is_instance_valid(system_overlay):
+		_close_system()
 	for name_value in nav_buttons:
 		var active: bool = name_value == tab and view in ["tab", "inspector"]
 		nav_buttons[name_value].add_theme_stylebox_override("normal", box(INK if active else PAPER, 10, 6))
@@ -829,9 +982,6 @@ func _render() -> void:
 		"log":
 			header_label.text = EYEBROWS["Log"]
 			_log_panel()
-		"system":
-			header_label.text = EYEBROWS["System"]
-			_system_panel()
 		_:
 			header_label.text = str(EYEBROWS.get(tab, tab.to_upper()))
 			_selection_pill()
@@ -943,7 +1093,7 @@ func _terrain_panel() -> void:
 		var type = i
 		var b = button("●  " + TerrainModel.SURFACE_NAMES[i], func(): game.paint_surface = type; game.set_tool("paint"); refresh_view(), palette)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var palette_color: Color = game.terrain.palette[i] if i < game.terrain.palette.size() else TerrainModel.SURFACE_COLORS[i]
+		var palette_color: Color = game.terrain.palette[i] if i < game.terrain.palette.size() else GraphicsPalette.SURFACE_COLORS[i]
 		b.add_theme_color_override("font_color", palette_color.darkened(0.4))
 		if game.tool == "paint" and int(game.paint_surface) == i:
 			b.add_theme_stylebox_override("normal", box(CARD_ACTIVE, 8, 10))
@@ -2206,7 +2356,7 @@ func _close_reports() -> void:
 		reports_overlay.queue_free()
 	reports_overlay = null
 	if is_instance_valid(panel):
-		panel.visible = true
+		panel.visible = not panel_hidden
 	if is_instance_valid(_workspace):
 		_workspace.visible = true
 
@@ -2604,8 +2754,8 @@ func _log_panel() -> void:
 	if shown == 0:
 		note("No log entries match these filters.")
 
-func _system_panel() -> void:
-	heading("Your resort.")
+func _system_save_section() -> void:
+	heading("Save & load.")
 	section("Save")
 	var save_card = card()
 	var edit = LineEdit.new()
@@ -2615,54 +2765,88 @@ func _system_panel() -> void:
 	var save_row = actions(save_card)
 	primary("Save resort", func(): game.save_name = edit.text; game.save_current(); show_system(), save_row).tooltip_text = "F5 quick-saves under the current name"
 	var saves: Array = SaveStore.list_saves()
-	if not saves.is_empty():
-		section("Load")
-		for name_value in saves:
-			var selected = name_value
-			list_item(str(name_value), "", func(): game.load_saved(selected))
-		note("Autosaves run at each settlement and before replacing your current resort.")
-	section("Settings")
+	section("Load")
+	if saves.is_empty():
+		note("No saved resorts yet.")
+	for name_value in saves:
+		var selected = name_value
+		list_item(str(name_value), "", func(): game.load_saved(selected))
+	note("Autosaves run at each settlement and before replacing your current resort.")
+
+func _system_settings_section() -> void:
+	heading("Settings.")
+	segmented(null, [["Graphics", "graphics"], ["Audio", "audio"], ["Gameplay", "gameplay"]], _settings_tab, func(v): _settings_tab = str(v); _render_system())
+	match _settings_tab:
+		"graphics": _settings_graphics_tab()
+		"audio": _settings_audio_tab()
+		"gameplay": _settings_gameplay_tab()
+
+func _settings_graphics_tab() -> void:
 	var settings = card()
 	var quality_row = HBoxContainer.new()
 	quality_row.add_theme_constant_override("separation", 8)
 	settings.add_child(quality_row)
 	var quality_label = Label.new()
-	quality_label.text = "Graphics quality"
+	quality_label.text = "Quality"
 	quality_label.add_theme_font_size_override("font_size", 13)
 	quality_row.add_child(quality_label)
 	var quality_buttons: Dictionary = {}
 	for preset_name in ["low", "standard", "high"]:
 		var selected_preset: String = preset_name
-		var button: Button = small_button(preset_name.capitalize(), func(): game.set_graphics_preset(selected_preset), quality_row)
-		quality_buttons[preset_name] = button
+		var preset_button: Button = small_button(preset_name.capitalize(), func(): game.set_graphics_preset(selected_preset); _render_system(), quality_row)
+		quality_buttons[preset_name] = preset_button
 	_update_quality_buttons(quality_buttons)
-	var quality_note = Label.new()
-	quality_note.text = "Low trims foliage, shadows and particles. Standard matches the current default look."
-	quality_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	quality_note.add_theme_font_size_override("font_size", 11)
-	quality_note.add_theme_color_override("font_color", MUTED)
-	settings.add_child(quality_note)
-	var pause_toggle = CheckButton.new()
-	pause_toggle.text = "Pause on critical alerts"
-	pause_toggle.add_theme_font_size_override("font_size", 13)
-	pause_toggle.button_pressed = game.pause_on_critical
-	pause_toggle.toggled.connect(func(v): game.pause_on_critical = v)
-	settings.add_child(pause_toggle)
+	note("Low trims foliage, shadows and particles. Standard matches the default look. High raises shadow and reflection detail.", MUTED, settings)
+
+func _settings_audio_tab() -> void:
+	var settings = card()
 	var sound_toggle = CheckButton.new()
 	sound_toggle.text = "Sound effects"
 	sound_toggle.add_theme_font_size_override("font_size", 13)
 	sound_toggle.button_pressed = game.sound_enabled
 	sound_toggle.toggled.connect(func(v): game.sound_enabled = v)
 	settings.add_child(sound_toggle)
+	var volume_row = HBoxContainer.new()
+	volume_row.add_theme_constant_override("separation", 8)
+	settings.add_child(volume_row)
+	var volume_caption = label("Volume", 13, MUTED)
+	volume_caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	volume_caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	volume_row.add_child(volume_caption)
+	var volume = HSlider.new()
+	volume.min_value = -40
+	volume.max_value = 0
+	volume.step = 1
+	volume.value = game.master_volume_db
+	volume.custom_minimum_size.x = 180
+	volume.value_changed.connect(func(v): game.set_master_volume_db(v))
+	volume_row.add_child(volume)
+
+func _settings_gameplay_tab() -> void:
+	var settings = card()
+	var pause_toggle = CheckButton.new()
+	pause_toggle.text = "Pause on critical alerts"
+	pause_toggle.add_theme_font_size_override("font_size", 13)
+	pause_toggle.button_pressed = game.pause_on_critical
+	pause_toggle.toggled.connect(func(v): game.pause_on_critical = v)
+	settings.add_child(pause_toggle)
 	small_button("Reset camera", func(): game.reset_resort_camera(), settings)
-	section("Game")
-	var game_row = actions()
-	button("New game / main menu", func(): show_menu(), game_row).size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	section("Controls")
+	kv(settings, "Mode", "Sandbox" if game.sim.sandbox else "Management", INK, 12)
+
+func _system_controls_section() -> void:
+	heading("Controls.")
 	var help = card()
 	for pair in [["Pan", "WASD / arrows · middle drag"], ["Rotate", "Q / E · right drag"], ["Zoom", "Wheel"], ["Placement", "R rotates · Esc inspects"], ["Time", "Space pauses"], ["Edit", "⌘Z undo · ⌘⇧Z redo"], ["Save", "F5"]]:
 		kv(help, str(pair[0]), str(pair[1]), INK, 12)
+
+func _system_about_section() -> void:
+	heading("About.")
 	note("Hole in Fun · Godot 4.7 · Original procedural models and sounds. Offline, single-player development build.")
+	var info = card()
+	var hardware: Dictionary = GraphicsSettingsService.hardware_info()
+	kv(info, "Renderer", str(hardware.get("renderer", "")), INK, 12)
+	kv(info, "GPU", str(hardware.get("gpu", "unknown")), INK, 12)
+	kv(info, "Godot", str(Engine.get_version_info().get("string", "")), INK, 12)
 
 # ---------------------------------------------------------------- refresh
 
@@ -2802,10 +2986,15 @@ func _refresh_overlay_panel() -> void:
 		grid_button.add_theme_color_override("font_hover_color", PAPER if grid_on else INK)
 
 func _gradient_texture(start: Color, finish: Color) -> ImageTexture:
+	var key: String = "%s:%s" % [start.to_html(), finish.to_html()]
+	if _gradient_cache.has(key):
+		return _gradient_cache[key]
 	var image = Image.create(128, 1, false, Image.FORMAT_RGBA8)
 	for x in range(128):
 		image.set_pixel(x, 0, start.lerp(finish, float(x) / 127.0))
-	return ImageTexture.create_from_image(image)
+	var texture := ImageTexture.create_from_image(image)
+	_gradient_cache[key] = texture
+	return texture
 
 static func format_money(value: float) -> String:
 	var text_value = str(roundi(value))
@@ -2822,6 +3011,7 @@ static func format_money(value: float) -> String:
 func show_menu() -> void:
 	game.menu_open = true
 	_close_reports()
+	_close_system()
 	if is_instance_valid(menu): menu.queue_free()
 	menu = Control.new()
 	menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

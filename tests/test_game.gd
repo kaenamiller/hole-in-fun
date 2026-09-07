@@ -49,6 +49,8 @@ func _run() -> void:
 	await _test_filtered_analysis_draw(game)
 	await _test_event_log_and_jump(game)
 	await _test_statistics_tab(game)
+	await _test_system_menu(game)
+	await _test_panel_dismiss(game)
 	await _test_guests_feedback_panel(game)
 	await _test_marketing_panel(game)
 	await _test_staff_panel(game)
@@ -254,22 +256,54 @@ func _test_statistics_tab(game: Node3D) -> void:
 	if FileAccess.file_exists(export_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(export_path))
 
+func _test_system_menu(game: Node3D) -> void:
+	var starting_volume: float = game.master_volume_db
+	game.ui.show_system()
+	await process_frame
+	_check(is_instance_valid(game.ui.system_overlay), "Menu button opens the system overlay")
+	game.ui._system_section = "settings"
+	game.ui.show_system()
+	await process_frame
+	game.ui._settings_tab = "audio"
+	game.ui._render_system()
+	await process_frame
+	game.set_master_volume_db(-10.0)
+	_check(is_equal_approx(game.master_volume_db, -10.0), "Menu audio tab writes through to master volume")
+	game.set_master_volume_db(starting_volume)
+	game.ui._close_system()
+	await process_frame
+	_check(not is_instance_valid(game.ui.system_overlay), "Menu overlay closes and restores the panel body")
+	_check(game.ui.body == game.ui._target, "closing the menu restores the side panel as the render target")
+
+func _test_panel_dismiss(game: Node3D) -> void:
+	game.ui.show_tab("Holes")
+	await process_frame
+	_check(game.ui.panel.visible and not game.ui.panel_hidden, "detail panel starts visible")
+	game.ui.panel_close_button.emit_signal("pressed")
+	await process_frame
+	_check(not game.ui.panel.visible and game.ui.panel_hidden, "close button hides the detail panel")
+	game.ui.show_tab("Build")
+	await process_frame
+	_check(game.ui.panel.visible and not game.ui.panel_hidden, "switching tabs from the rail reopens a hidden panel")
+	game.ui.panel_close_button.emit_signal("pressed")
+	await process_frame
+	game.select_hole(int(game.terrain.holes[0].get("id", -1)))
+	await process_frame
+	_check(game.ui.panel.visible and not game.ui.panel_hidden, "selecting an object in the world reopens a hidden panel")
+
 func _test_guests_feedback_panel(game: Node3D) -> void:
 	game.sim._arrival_target = 0
 	game.ui.show_tab("Guests")
 	await process_frame
 	_check(game.ui.tab == "Guests", "Guests tab renders with zero reviews")
 	var before_reviews: int = game.sim.reviews.size()
-	var admitted_id: int = game.sim.admit_group(1)
-	_check(admitted_id > 0, "Guests feedback test could not admit a group")
-	game.sim.tick(36000.0)
+	game.sim._record_guest_review({"id": 7001, "name": "UI Guest", "mood": 0.7, "feedback": []}, true, 3)
 	game.ui.show_tab("Guests")
 	await process_frame
 	var added_reviews: int = game.sim.reviews.size() - before_reviews
 	_check(added_reviews == 1, "Guests tab renders with one review")
-	for _index in range(3):
-		game.sim.admit_group(2)
-		game.sim.tick(36000.0)
+	for review_index in range(6):
+		game.sim._record_guest_review({"id": 7010 + review_index, "name": "UI Guest %d" % review_index, "mood": 0.7, "feedback": []}, true, 3)
 	game.ui.show_tab("Guests")
 	await process_frame
 	_check(game.sim.reviews.size() >= before_reviews + 7, "Guests tab renders with many reviews")

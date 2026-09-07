@@ -12,7 +12,7 @@ Roll-overs replace the old day boundary:
 - **`_roll_month`** (month boundary): wages, upkeep, and loan settlement (ledger entries dated to the settled month), monthly history record, insolvency check.
 - **`_roll_season`** (quarter boundary): course grading and seasonal assessment.
 
-Demand uses **awareness** (reach) and **rating** (conversion), plus facilities, wear, season, weekend, and price elasticity. Demand was authored against the old 36,000-second operating day and is converted with `DEMAND_SCALE` (× 800/36000 × 4); a starter resort targets roughly 3–16 arrivals per calendar day, assembled into groups of one to four. `arrivals_enabled = false` suspends walk-ins without disturbing golfers already on the course.
+Demand starts from course throughput: playable holes × average group size × actor-seconds per calendar day ÷ the target round duration, at 78% target utilization. Awareness, rating, facilities, scenery, wear, season, weekend, and price elasticity modify that fractional rate. Fractional demand carries across calendar days, so small courses receive appropriately spaced groups without a forced daily arrival. `arrivals_enabled = false` suspends walk-ins without disturbing golfers already on the course.
 
 ## Pace of play
 
@@ -82,7 +82,7 @@ Facilities are discovered from `terrain.objects` using Catalog definitions with 
 
 **Post-round stops**: after the last hole, up to two of `restaurant` (`prices.meal`, ledger `meals`), `bar_terrace`, `spa`, and `pro_shop` (`prices.retail`, ledger `retail`) are chosen from needs and budget. Completion still counts when `post_round` is set.
 
-**Lodge**: groups with `wants_lodging` (probability `0.12 + 0.2 × (grade − 1)` when rooms are free) may stay overnight instead of departing. `_process_lodge_night` charges `prices.room` (default 120) per guest (ledger `lodging`), resets needs, and decrements `lodge_nights` (1–3). Lodged groups survive day rollover; `_release_lodge_guests_to_tee` re-queues them as unpaid `to_tee` groups the next morning. Lodged guests count toward the 200-guest cap.
+**Lodge**: groups that want lodging may reserve one to three nights when rooms are available. The full stay is charged immediately as ancillary room revenue, after which the golfers continue their normal departure. Lodging never pauses, stores, refreshes, or re-queues active golfers.
 
 **Closed facilities** are omitted by `_has_facility` / `_best_facility` and do not decay in `_tick_facility_decay`. Toggle via `main.gd::toggle_facility_closed(id)` (undoable object command).
 
@@ -96,7 +96,7 @@ Each worker record carries `skill`, `experience` (0..1), `morale` (0..1), `fatig
 
 `skill × (0.7 + 0.3 × experience) × (0.6 + 0.4 × morale) × (1 − 0.35 × fatigue)`, then ×1.1 if morale > 0.8, and ×0.5 if fatigue > 0.8.
 
-**Fatigue** rises 0.0011 per on-shift actor minute (slower with the `careful` trait) and recovers continuously while off shift. Shifts use a repeating actor-time day rather than the compressed game calendar: `early` and `late` cover consecutive eight-hour blocks, while `full` is always on.
+**Fatigue** rises 0.0011 per on-duty actor minute (slower with the `careful` trait) and recovers continuously while off duty. Every worker follows a repeating 20-minute actor-time duty cycle: 15 minutes on and 5 minutes off. Early, full, and late schedules stagger that cycle by five minutes so coverage overlaps without using the compressed calendar.
 
 **Morale** drifts toward a target from wage fairness (vs. catalog base × (1 + experience)), walking workload, facility/hole condition where assigned, and resort satisfaction. Below 0.3 for three days triggers `raise_requested`; ignored for five more days the worker quits (critical log). Firing costs 3× wage severance and lowers other staff morale by 0.05.
 
@@ -148,7 +148,7 @@ Building, scenery, staff roles, and future facilities unlock through a research 
 
 `grade_requirements()`, `unlocks()`, `project_available()`, `milestone_progress()`, and `can_build(kind)` expose the rules to UI code.
 
-The six event IDs are `open_day`, `charity_scramble`, `beginner_clinic`, `club_championship`, `regional_amateur`, and `invitational`. Only one event can be scheduled per day. Attendance is counted when an event group begins real play, and completed rounds are counted only when those golfers finish the available course. Because rounds now span many calendar days, an event settles when its field finishes playing, when attendance stalls for a fortnight (saturated courses can hold part of the field waiting for weeks), or when a hard course-sized grace period ends; completion is judged against the guests who actually got onto the course. Success, publicity, satisfaction, and scaled event revenue therefore depend on actual attendance and completion rather than a timer-only reward.
+The six event IDs are `open_day`, `charity_scramble`, `beginner_clinic`, `club_championship`, `regional_amateur`, and `invitational`. Only one event can be scheduled per day. Attendance is counted when an event group begins real play, and completed rounds are counted only when those golfers finish the available course. Stall and hard deadlines are derived from the target actor-time round duration, calendar conversion, playable-hole pipeline capacity, and expected field waves. Completion is judged against the golfers who actually reached the course, so outcomes depend on attendance and completed play rather than a fixed timer.
 
 ## Saving and integration API
 

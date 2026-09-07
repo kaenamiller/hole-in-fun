@@ -6,6 +6,12 @@ const ShotEngineClass = preload("res://scripts/shot_engine.gd")
 const AnalyticsGridClass = preload("res://scripts/analytics_grid.gd")
 const MapGeneratorClass = preload("res://scripts/map_generator.gd")
 const CatalogClass = preload("res://scripts/catalog.gd")
+const HoleMowingClass = preload("res://scripts/hole_mowing.gd")
+const CourseContoursClass = preload("res://scripts/course_contours.gd")
+const WaterFieldClass = preload("res://scripts/water_field.gd")
+const WaterRipplePoolClass = preload("res://scripts/water_ripple_pool.gd")
+const GroundCoverClass = preload("res://scripts/ground_cover.gd")
+const GroundCoverAssetsClass = preload("res://scripts/ground_cover_assets.gd")
 
 func _init() -> void:
 	var failures: int = 0
@@ -26,6 +32,21 @@ func _init() -> void:
 	failures += _test_bunker_depth()
 	failures += _test_map_generation()
 	failures += _test_map_snapshot_fields()
+	failures += _test_fairway_ownership_fallback()
+	failures += _test_mowing_chunk_seam_stability()
+	failures += _test_mowing_save_round_trip()
+	failures += _test_contour_legacy_save()
+	failures += _test_contour_save_round_trip()
+	failures += _test_contour_gameplay_agreement()
+	failures += _test_contour_undo()
+	failures += _test_contour_cup_ownership()
+	failures += _test_contour_chunk_bounds()
+	failures += _test_ground_cover_determinism()
+	failures += _test_ground_cover_snapshot_seed()
+	failures += _test_water_depth_field()
+	failures += _test_water_body_ids()
+	failures += _test_water_field_restore()
+	failures += _test_water_ripple_contract()
 	if failures == 0:
 		print("test_terrain: all tests passed")
 	else:
@@ -332,6 +353,295 @@ func _test_map_snapshot_fields() -> int:
 	legacy_ok = legacy_ok and legacy.map_id == "cedar_house" and legacy.palette.size() == 7
 	legacy_ok = legacy_ok and float(legacy.cost_multipliers.get("raise", 0.0)) == 1.0
 	return _expect(round_trip and legacy_ok, "map snapshot fields did not round-trip or legacy defaults failed")
+
+func _test_fairway_ownership_fallback() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var tee_a: Vector3 = Vector3(200.0, 0.0, 300.0)
+	var cup_a: Vector3 = Vector3(360.0, 0.0, 300.0)
+	var tee_b: Vector3 = Vector3(620.0, 0.0, 300.0)
+	var cup_b: Vector3 = Vector3(780.0, 0.0, 300.0)
+	for index in range(20):
+		terrain.paint_disk(tee_a.lerp(cup_a, float(index) / 19.0), 16.0, 1)
+		terrain.paint_disk(tee_b.lerp(cup_b, float(index) / 19.0), 16.0, 1)
+	terrain.paint_disk(tee_a, 9.0, 3)
+	terrain.paint_disk(cup_a, 16.0, 2)
+	terrain.paint_disk(tee_b, 9.0, 3)
+	terrain.paint_disk(cup_b, 16.0, 2)
+	var hole_a: Dictionary = terrain.add_hole(tee_a, cup_a, 4)
+	var hole_b: Dictionary = terrain.add_hole(tee_b, cup_b, 4)
+	var midpoint: Vector3 = Vector3(490.0, 0.0, 300.0)
+	terrain.paint_disk(midpoint, 10.0, 1)
+	var owner_mid: int = terrain.fairway_owner(midpoint)
+	var owner_near_a: int = terrain.fairway_owner(Vector3(330.0, 0.0, 300.0))
+	var owner_near_b: int = terrain.fairway_owner(Vector3(650.0, 0.0, 300.0))
+	var authored_index: int = terrain._cell_index(midpoint)
+	hole_a["mowing"] = {"fairway_cells": [authored_index]}
+	terrain.touch()
+	var authored_owner: int = terrain.fairway_owner(midpoint)
+	var fallback_ok: bool = owner_near_a == int(hole_a.get("id", -1))
+	fallback_ok = fallback_ok and owner_near_b == int(hole_b.get("id", -1))
+	fallback_ok = fallback_ok and owner_mid in [int(hole_a.get("id", -1)), int(hole_b.get("id", -1))]
+	var authored_ok: bool = authored_owner == int(hole_a.get("id", -1))
+	return _expect(fallback_ok and authored_ok, "fairway ownership fallback or authored override failed")
+
+func _test_mowing_chunk_seam_stability() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var tee: Vector3 = Vector3(300.0, 0.0, 300.0)
+	var cup: Vector3 = Vector3(500.0, 0.0, 300.0)
+	for index in range(20):
+		terrain.paint_disk(tee.lerp(cup, float(index) / 19.0), 16.0, 1)
+	terrain.paint_disk(tee, 9.0, 3)
+	terrain.paint_disk(cup, 16.0, 2)
+	var hole: Dictionary = terrain.add_hole(tee, cup, 4)
+	var pattern: Dictionary = HoleMowingClass.effective_pattern(hole)
+	var dir: Vector2 = Vector2(cos(float(pattern["orientation"])), sin(float(pattern["orientation"])))
+	var world_x: float = 512.0
+	var sample_a: float = HoleMowingClass.stripe_sample(Vector2(world_x, 512.0), dir, float(pattern["width"]), float(pattern["phase"]))
+	var sample_b: float = HoleMowingClass.stripe_sample(Vector2(world_x + 0.001, 512.0), dir, float(pattern["width"]), float(pattern["phase"]))
+	var image: Image = HoleMowingClass.build_pattern_image(terrain)
+	var cell_a: int = 128 * 256 + 128
+	var cell_b: int = 128 * 256 + 129
+	var bytes_a: Color = image.get_pixel(cell_a % 256, int(cell_a / 256))
+	var bytes_b: Color = image.get_pixel(cell_b % 256, int(cell_b / 256))
+	var seam_ok: bool = absf(sample_a - sample_b) < 0.02
+	seam_ok = seam_ok and absf(bytes_a.r - bytes_b.r) < 0.02 and absf(bytes_a.g - bytes_b.g) < 0.02
+	return _expect(seam_ok, "mowing stripe phase is not stable across adjacent cells")
+
+func _test_mowing_save_round_trip() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var tee: Vector3 = Vector3(300.0, 0.0, 300.0)
+	var cup: Vector3 = Vector3(420.0, 0.0, 300.0)
+	terrain.paint_disk(tee, 9.0, 3)
+	terrain.paint_disk(cup, 16.0, 2)
+	for index in range(12):
+		terrain.paint_disk(tee.lerp(cup, float(index) / 11.0), 14.0, 1)
+	var hole: Dictionary = terrain.add_hole(tee, cup, 4)
+	hole["mowing"] = {
+		"orientation": 1.25,
+		"width": 0.72,
+		"phase": 0.4,
+		"contrast": 0.8,
+		"pattern_type": "straight",
+		"fairway_cells": [terrain._cell_index(Vector3(360.0, 0.0, 300.0))],
+	}
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var restored_hole: Dictionary = copy.holes[0]
+	var mowing: Dictionary = restored_hole.get("mowing", {})
+	var round_trip: bool = saved.has("mowing_version")
+	round_trip = round_trip and is_equal_approx(float(mowing.get("orientation", 0.0)), 1.25)
+	round_trip = round_trip and is_equal_approx(float(mowing.get("width", 0.0)), 0.72)
+	round_trip = round_trip and is_equal_approx(float(mowing.get("phase", 0.0)), 0.4)
+	round_trip = round_trip and is_equal_approx(float(mowing.get("contrast", 0.0)), 0.8)
+	round_trip = round_trip and int((mowing.get("fairway_cells", []) as Array)[0]) == terrain._cell_index(Vector3(360.0, 0.0, 300.0))
+	var legacy: TerrainModel = TerrainModelClass.new()
+	legacy.starter_resort(false)
+	var legacy_pattern: Dictionary = HoleMowingClass.effective_pattern(legacy.holes[0])
+	var legacy_ok: bool = legacy_pattern.has("orientation") and float(legacy_pattern.get("width", 0.0)) > 0.0
+	return _expect(round_trip and legacy_ok, "mowing metadata did not round-trip or legacy defaults missing")
+
+func _ellipse_points(center: Vector2, radius_x: float, radius_z: float, segments: int = 28) -> PackedVector2Array:
+	var points: PackedVector2Array = PackedVector2Array()
+	for index in range(segments):
+		var angle: float = float(index) / float(segments) * TAU
+		points.append(center + Vector2(cos(angle) * radius_x, sin(angle) * radius_z))
+	return points
+
+func _test_contour_legacy_save() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	terrain.starter_resort(false)
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var legacy_ok: bool = not saved.has("course_features") or (saved.get("course_features", []) as Array).is_empty()
+	legacy_ok = legacy_ok and copy.course_features.is_empty()
+	legacy_ok = legacy_ok and copy.holes.size() == terrain.holes.size()
+	return _expect(legacy_ok, "legacy saves without course_features should restore unchanged")
+
+func _test_contour_save_round_trip() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var cup: Vector3 = Vector3(360.0, 0.0, 360.0)
+	var bunker: Vector3 = Vector3(390.0, 0.0, 330.0)
+	var green_feature: Dictionary = CourseContoursClass.make_feature(terrain.uid(), "green", 7, _ellipse_points(Vector2(cup.x, cup.z), 14.0, 12.0))
+	var bunker_feature: Dictionary = CourseContoursClass.make_feature(terrain.uid(), "bunker", 7, _ellipse_points(Vector2(bunker.x, bunker.z), 8.0, 7.0))
+	terrain.course_features = [green_feature, bunker_feature]
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var round_trip: bool = saved.has("contours_version") and int(saved.get("contours_version", 0)) == CourseContoursClass.SCHEMA_VERSION
+	round_trip = round_trip and copy.course_features.size() == 2
+	round_trip = round_trip and int(copy.course_features[0].get("id", -1)) == int(green_feature.get("id", -2))
+	round_trip = round_trip and str(copy.course_features[1].get("kind", "")) == "bunker"
+	return _expect(round_trip, "course feature metadata did not round-trip")
+
+func _test_contour_gameplay_agreement() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var cup: Vector3 = Vector3(360.0, 0.0, 360.0)
+	var bunker: Vector3 = Vector3(390.0, 0.0, 330.0)
+	var green_feature: Dictionary = CourseContoursClass.make_feature(terrain.uid(), "green", 7, _ellipse_points(Vector2(cup.x, cup.z), 14.0, 12.0))
+	var bunker_feature: Dictionary = CourseContoursClass.make_feature(terrain.uid(), "bunker", 7, _ellipse_points(Vector2(bunker.x, bunker.z), 8.0, 7.0))
+	var command: Dictionary = terrain.plan_feature_contour(green_feature)
+	terrain.apply_contour_command(command)
+	command = terrain.plan_feature_contour(bunker_feature)
+	terrain.apply_contour_command(command)
+	var inside_green: Vector3 = cup
+	var outside_green: Vector3 = cup + Vector3(20.0, 0.0, 0.0)
+	var inside_bunker: Vector3 = bunker
+	var outside_bunker: Vector3 = bunker + Vector3(12.0, 0.0, 0.0)
+	var agreement_ok: bool = terrain.surface_at(inside_green) == 2
+	agreement_ok = agreement_ok and terrain.surface_at(outside_green) != 2
+	agreement_ok = agreement_ok and terrain.surface_at(inside_bunker) == 4
+	agreement_ok = agreement_ok and terrain.surface_at(outside_bunker) != 4
+	agreement_ok = agreement_ok and CourseContoursClass.gameplay_surface_matches(green_feature, terrain, inside_green)
+	agreement_ok = agreement_ok and CourseContoursClass.gameplay_surface_matches(bunker_feature, terrain, inside_bunker)
+	var render_inside: float = CourseContoursClass.render_weight(green_feature, Vector2(inside_green.x, inside_green.z))
+	var render_outside: float = CourseContoursClass.render_weight(green_feature, Vector2(outside_green.x, outside_green.z))
+	agreement_ok = agreement_ok and render_inside > 0.9 and render_outside < 0.1
+	return _expect(agreement_ok, "authored contours disagree with raster gameplay surfaces")
+
+func _test_contour_undo() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var center: Vector3 = Vector3(420.0, 0.0, 420.0)
+	var before_surfaces: PackedByteArray = terrain.surfaces.duplicate()
+	var before_heights: PackedFloat32Array = terrain.heights.duplicate()
+	var feature: Dictionary = CourseContoursClass.make_feature(terrain.uid(), "green", 3, _ellipse_points(Vector2(center.x, center.z), 12.0, 10.0))
+	var command: Dictionary = terrain.plan_feature_contour(feature)
+	var cost: float = float(command.get("cost", 0.0))
+	terrain.apply_contour_command(command)
+	var changed: bool = terrain.surfaces != before_surfaces or terrain.heights != before_heights
+	terrain.apply_contour_command(command, true)
+	var restored: bool = terrain.surfaces == before_surfaces and terrain.heights == before_heights
+	restored = restored and terrain.course_features.is_empty()
+	return _expect(changed and restored and cost > 0.0, "contour undo did not restore raster, heights, and feature data")
+
+func _test_contour_cup_ownership() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var tee: Vector3 = Vector3(300.0, 0.0, 360.0)
+	var cup: Vector3 = Vector3(360.0, 0.0, 360.0)
+	var hole: Dictionary = terrain.add_hole(tee, cup, 4)
+	var feature: Dictionary = CourseContoursClass.make_feature(int(hole.get("id", -1)), "green", int(hole.get("id", -1)), _ellipse_points(Vector2(cup.x, cup.z), 15.0, 13.0))
+	var command: Dictionary = terrain.plan_feature_contour(feature)
+	terrain.apply_contour_command(command)
+	var owned: bool = terrain.on_green(cup, hole)
+	var lobe: Vector3 = cup + Vector3(8.0, 0.0, 6.0)
+	var lobe_owned: bool = terrain.on_green(lobe, hole)
+	return _expect(owned and lobe_owned, "cup ownership should follow rasterized green feature")
+
+func _test_contour_chunk_bounds() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var center: Vector3 = Vector3(132.0, 0.0, 132.0)
+	var feature: Dictionary = CourseContoursClass.make_feature(terrain.uid(), "bunker", -1, _ellipse_points(Vector2(center.x, center.z), 10.0, 9.0))
+	var command: Dictionary = terrain.plan_feature_contour(feature)
+	terrain.changed_chunks.clear()
+	terrain.apply_contour_command(command)
+	var chunk: Vector2i = Vector2i(int(center.x / 64.0), int(center.z / 64.0))
+	var marked: bool = terrain.changed_chunks.has(chunk)
+	var view: TerrainView = TerrainViewClass.new()
+	view.setup(terrain)
+	view.rebuild_dirty()
+	var has_mesh: bool = view.chunks.has(chunk)
+	view.free()
+	return _expect(marked and has_mesh, "contour edits should mark and rebuild intersecting chunks")
+
+func _test_ground_cover_determinism() -> int:
+	if not GroundCoverAssetsClass.available():
+		return 0
+	var terrain: TerrainModel = MapGeneratorClass.generate(CatalogClass.map("cedar_house"))
+	terrain.starter_resort()
+	var settings: GraphicsSettings = GraphicsSettings.defaults()
+	var region: Vector2i = GroundCoverClass.region_key_for_point(Vector3(280.0, 0.0, 280.0))
+	var first: Array = GroundCoverClass.build_region_batches(terrain, region, settings)
+	terrain.paint_disk(Vector3(900.0, 0.0, 900.0), 12.0, 1)
+	var second: Array = GroundCoverClass.build_region_batches(terrain, region, settings)
+	var stable: bool = str(first) == str(second)
+	return _expect(stable, "distant terrain edits must not reshuffle unrelated ground-cover regions")
+
+func _test_ground_cover_snapshot_seed() -> int:
+	var terrain: TerrainModel = MapGeneratorClass.generate(CatalogClass.map("cedar_house"))
+	terrain.generation_seed = 51515
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var restored: bool = int(copy.generation_seed) == 51515
+	restored = restored and GroundCoverClass.scatter_seed_for(copy) == GroundCoverClass.scatter_seed_for(terrain)
+	return _expect(restored, "generation_seed round-trips for scatter determinism")
+
+func _paint_water_cell(terrain: TerrainModel, x: int, z: int, level: float) -> void:
+	var index: int = z * 256 + x
+	terrain.surfaces[index] = 5
+	terrain.water_levels[index] = level
+	terrain.mark_water_field_dirty(Rect2(float(x) * 4.0, float(z) * 4.0, 4.0, 4.0))
+
+func _test_water_depth_field() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var center: Vector3 = Vector3(512.0, 0.0, 512.0)
+	terrain.paint_disk(center, 10.0, 5)
+	for z in range(120, 136):
+		for x in range(120, 136):
+			var index: int = z * 256 + x
+			terrain.water_levels[index] = 1.2
+	terrain.mark_water_field_dirty(Rect2(480.0, 480.0, 64.0, 64.0))
+	terrain.ensure_water_field()
+	var shallow: Dictionary = terrain.water_body_at(center + Vector3(-8.0, 0.0, 0.0))
+	var deep: Dictionary = terrain.water_body_at(center)
+	terrain.apply_brush(terrain.plan_brush("lower", center, 8.0, 1.2, 0))
+	var lowered: Dictionary = terrain.water_body_at(center)
+	var depth_ok: bool = float(deep.get("depth", 0.0)) > float(shallow.get("depth", 0.0)) + 0.05
+	depth_ok = depth_ok and float(lowered.get("depth", 0.0)) > float(deep.get("depth", 0.0)) + 0.05
+	depth_ok = depth_ok and float(shallow.get("shore_distance", 0.0)) < float(deep.get("shore_distance", 0.0))
+	return _expect(depth_ok, "water depth and shore distance should follow basin height")
+
+func _test_water_body_ids() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	_paint_water_cell(terrain, 40, 40, 0.5)
+	_paint_water_cell(terrain, 41, 40, 0.5)
+	_paint_water_cell(terrain, 80, 80, 2.0)
+	_paint_water_cell(terrain, 81, 80, 2.0)
+	WaterFieldClass.full_rebuild(terrain)
+	var low: Dictionary = terrain.water_body_at(Vector3(162.0, 0.0, 162.0))
+	var high: Dictionary = terrain.water_body_at(Vector3(322.0, 0.0, 322.0))
+	var ids_ok: bool = int(low.get("body_id", -1)) >= 0 and int(high.get("body_id", -1)) >= 0
+	ids_ok = ids_ok and int(low.get("body_id", -1)) != int(high.get("body_id", -1))
+	ids_ok = ids_ok and int(low.get("body_id", -1)) == int(terrain.water_body_at(Vector3(166.0, 0.0, 162.0)).get("body_id", -2))
+	return _expect(ids_ok, "connected water at matching levels should share a stable body id")
+
+func _test_water_field_restore() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	terrain.paint_disk(Vector3(300.0, 0.0, 300.0), 12.0, 5)
+	var before: Dictionary = terrain.water_body_at(Vector3(300.0, 0.0, 300.0))
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var after: Dictionary = copy.water_body_at(Vector3(300.0, 0.0, 300.0))
+	var restored: bool = is_equal_approx(float(before.get("depth", 0.0)), float(after.get("depth", 0.0)))
+	restored = restored and int(before.get("body_id", -2)) == int(after.get("body_id", -3))
+	copy.paint_disk(Vector3(300.0, 0.0, 300.0), 12.0, 0)
+	copy.ensure_water_field()
+	var drained: Dictionary = copy.water_body_at(Vector3(300.0, 0.0, 300.0))
+	restored = restored and int(drained.get("body_id", -1)) == -1
+	return _expect(restored, "water field should restore and invalidate after drain")
+
+func _test_water_ripple_contract() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	terrain.paint_disk(Vector3(400.0, 0.0, 400.0), 10.0, 5)
+	var center: Vector3 = Vector3(400.0, 0.0, 400.0)
+	var center_index: int = terrain._cell_index(center)
+	terrain.water_levels[center_index] = terrain.height_at(center) + 1.0
+	terrain.mark_water_field_dirty(Rect2(360.0, 360.0, 80.0, 80.0))
+	terrain.ensure_water_field()
+	var sample: Dictionary = terrain.water_body_at(center)
+	var body_id: int = int(sample.get("body_id", -1))
+	var pool: WaterRipplePool = WaterRipplePoolClass.new()
+	pool.configure(4)
+	var accepted: bool = body_id >= 0 and float(sample.get("depth", 0.0)) > 0.0
+	accepted = accepted and pool.submit(body_id, center, 1.0, 6.0, 0.8, terrain)
+	var rejected_body: bool = not pool.submit(body_id + 999, center, 1.1, 6.0, 0.8, terrain)
+	var rejected_dry: bool = not pool.submit(body_id, Vector3(700.0, 0.0, 700.0), 1.2, 6.0, 0.8, terrain)
+	terrain.paint_disk(center, 10.0, 0)
+	terrain.ensure_water_field()
+	var rejected_removed: bool = not pool.submit(body_id, center, 1.3, 6.0, 0.8, terrain)
+	return _expect(accepted and rejected_body and rejected_dry and rejected_removed, "ripple pool should accept valid water impacts only")
 
 func _expect(condition: bool, message: String) -> int:
 	if condition:

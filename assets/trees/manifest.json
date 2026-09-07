@@ -1,0 +1,322 @@
+{
+  "generator_version": "1.0.0",
+  "global_seed": 458790,
+  "crown_choice": {
+    "selected": "opaque_clusters",
+    "rejected": "alpha_cutout_cards",
+    "opaque_near_tris": 288,
+    "cards_near_tris": 36,
+    "opaque_mid_tris": 96,
+    "cards_mid_tris": 16,
+    "notes": "Opaque clusters win on Compatibility: fewer overdraw layers in dense woodland, stable silhouettes at hole distance, and shared resort_foliage batching. Cards were ~35% fewer triangles but ~3.2x estimated fill cost in a 40-tree view."
+  },
+  "lod_thresholds": {
+    "near_end": 85.0,
+    "mid_begin": 75.0,
+    "mid_end": 190.0,
+    "far_begin": 175.0,
+    "far_end": 950.0
+  },
+  "materials": {
+    "bark": "prop.bark",
+    "foliage": "resort_foliage.gdshader"
+  },
+  "variants": [
+    {
+      "species": "oak",
+      "variant": 0,
+      "seed": 463511,
+      "scale": 2.8,
+      "pine": false,
+      "paths": {
+        "near": "trees/oak_v0_near.gltf",
+        "mid": "trees/oak_v0_mid.gltf",
+        "far": "trees/oak_v0_far.gltf",
+        "shadow": "trees/oak_v0_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 1172,
+          "bark_tris": 212,
+          "foliage_tris": 960,
+          "card_tris": 28
+        },
+        "mid": {
+          "triangles": 372,
+          "bark_tris": 132,
+          "foliage_tris": 240,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 160,
+          "bark_tris": 40,
+          "foliage_tris": 120,
+          "card_tris": 8
+        },
+        "shadow": {
+          "triangles": 264,
+          "seed": 472512
+        }
+      }
+    },
+    {
+      "species": "oak",
+      "variant": 1,
+      "seed": 463612,
+      "scale": 2.96,
+      "pine": false,
+      "paths": {
+        "near": "trees/oak_v1_near.gltf",
+        "mid": "trees/oak_v1_mid.gltf",
+        "far": "trees/oak_v1_far.gltf",
+        "shadow": "trees/oak_v1_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 1172,
+          "bark_tris": 212,
+          "foliage_tris": 960,
+          "card_tris": 28
+        },
+        "mid": {
+          "triangles": 372,
+          "bark_tris": 132,
+          "foliage_tris": 240,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 160,
+          "bark_tris": 40,
+          "foliage_tris": 120,
+          "card_tris": 8
+        },
+        "shadow": {
+          "triangles": 264,
+          "seed": 472613
+        }
+      }
+    },
+    {
+      "species": "oak",
+      "variant": 2,
+      "seed": 463713,
+      "scale": 3.1199999999999997,
+      "pine": false,
+      "paths": {
+        "near": "trees/oak_v2_near.gltf",
+        "mid": "trees/oak_v2_mid.gltf",
+        "far": "trees/oak_v2_far.gltf",
+        "shadow": "trees/oak_v2_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 1172,
+          "bark_tris": 212,
+          "foliage_tris": 960,
+          "card_tris": 28
+        },
+        "mid": {
+          "triangles": 372,
+          "bark_tris": 132,
+          "foliage_tris": 240,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 160,
+          "bark_tris": 40,
+          "foliage_tris": 120,
+          "card_tris": 8
+        },
+        "shadow": {
+          "triangles": 264,
+          "seed": 472714
+        }
+      }
+    },
+    {
+      "species": "oak",
+      "variant": 3,
+      "seed": 463814,
+      "scale": 3.28,
+      "pine": false,
+      "paths": {
+        "near": "trees/oak_v3_near.gltf",
+        "mid": "trees/oak_v3_mid.gltf",
+        "far": "trees/oak_v3_far.gltf",
+        "shadow": "trees/oak_v3_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 1172,
+          "bark_tris": 212,
+          "foliage_tris": 960,
+          "card_tris": 28
+        },
+        "mid": {
+          "triangles": 372,
+          "bark_tris": 132,
+          "foliage_tris": 240,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 160,
+          "bark_tris": 40,
+          "foliage_tris": 120,
+          "card_tris": 8
+        },
+        "shadow": {
+          "triangles": 264,
+          "seed": 472815
+        }
+      }
+    },
+    {
+      "species": "pine",
+      "variant": 0,
+      "seed": 464511,
+      "scale": 2.6,
+      "pine": true,
+      "paths": {
+        "near": "trees/pine_v0_near.gltf",
+        "mid": "trees/pine_v0_mid.gltf",
+        "far": "trees/pine_v0_far.gltf",
+        "shadow": "trees/pine_v0_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 316,
+          "bark_tris": 28,
+          "foliage_tris": 288,
+          "card_tris": 36
+        },
+        "mid": {
+          "triangles": 116,
+          "bark_tris": 20,
+          "foliage_tris": 96,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 44,
+          "bark_tris": 20,
+          "foliage_tris": 24,
+          "card_tris": 6
+        },
+        "shadow": {
+          "triangles": 43,
+          "seed": 473512
+        }
+      }
+    },
+    {
+      "species": "pine",
+      "variant": 1,
+      "seed": 464612,
+      "scale": 2.73,
+      "pine": true,
+      "paths": {
+        "near": "trees/pine_v1_near.gltf",
+        "mid": "trees/pine_v1_mid.gltf",
+        "far": "trees/pine_v1_far.gltf",
+        "shadow": "trees/pine_v1_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 316,
+          "bark_tris": 28,
+          "foliage_tris": 288,
+          "card_tris": 36
+        },
+        "mid": {
+          "triangles": 116,
+          "bark_tris": 20,
+          "foliage_tris": 96,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 44,
+          "bark_tris": 20,
+          "foliage_tris": 24,
+          "card_tris": 6
+        },
+        "shadow": {
+          "triangles": 43,
+          "seed": 473613
+        }
+      }
+    },
+    {
+      "species": "pine",
+      "variant": 2,
+      "seed": 464713,
+      "scale": 2.8600000000000003,
+      "pine": true,
+      "paths": {
+        "near": "trees/pine_v2_near.gltf",
+        "mid": "trees/pine_v2_mid.gltf",
+        "far": "trees/pine_v2_far.gltf",
+        "shadow": "trees/pine_v2_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 316,
+          "bark_tris": 28,
+          "foliage_tris": 288,
+          "card_tris": 36
+        },
+        "mid": {
+          "triangles": 116,
+          "bark_tris": 20,
+          "foliage_tris": 96,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 44,
+          "bark_tris": 20,
+          "foliage_tris": 24,
+          "card_tris": 6
+        },
+        "shadow": {
+          "triangles": 43,
+          "seed": 473714
+        }
+      }
+    },
+    {
+      "species": "pine",
+      "variant": 3,
+      "seed": 464814,
+      "scale": 2.99,
+      "pine": true,
+      "paths": {
+        "near": "trees/pine_v3_near.gltf",
+        "mid": "trees/pine_v3_mid.gltf",
+        "far": "trees/pine_v3_far.gltf",
+        "shadow": "trees/pine_v3_shadow.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 316,
+          "bark_tris": 28,
+          "foliage_tris": 288,
+          "card_tris": 36
+        },
+        "mid": {
+          "triangles": 116,
+          "bark_tris": 20,
+          "foliage_tris": 96,
+          "card_tris": 16
+        },
+        "far": {
+          "triangles": 44,
+          "bark_tris": 20,
+          "foliage_tris": 24,
+          "card_tris": 6
+        },
+        "shadow": {
+          "triangles": 43,
+          "seed": 473815
+        }
+      }
+    }
+  ]
+}

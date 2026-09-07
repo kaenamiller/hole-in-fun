@@ -16,11 +16,15 @@ const SHADER_PATHS: Array[String] = [
 	"res://shaders/resort_foliage.gdshader",
 	"res://shaders/resort_path.gdshader",
 	"res://shaders/resort_horizon.gdshader",
+	"res://shaders/resort_distant_foliage.gdshader",
+	"res://shaders/resort_cloud_layer.gdshader",
+	"res://shaders/resort_effect_mark.gdshader",
 ]
 
 const FEATURE_MATRIX: Dictionary = {
 	"gl_compatibility": {
 		"reflection_probes": true,
+		"planar_reflections": true,
 		"ssao": true,
 		"basic_fog": true,
 		"ssr": false,
@@ -30,6 +34,7 @@ const FEATURE_MATRIX: Dictionary = {
 	},
 	"mobile": {
 		"reflection_probes": true,
+		"planar_reflections": true,
 		"ssao": true,
 		"basic_fog": true,
 		"ssr": true,
@@ -39,6 +44,7 @@ const FEATURE_MATRIX: Dictionary = {
 	},
 	"forward_plus": {
 		"reflection_probes": true,
+		"planar_reflections": true,
 		"ssao": true,
 		"basic_fog": true,
 		"ssr": true,
@@ -47,6 +53,18 @@ const FEATURE_MATRIX: Dictionary = {
 		"gpu_profile": true,
 	},
 }
+
+
+static func reflection_probes_supported() -> bool:
+	var method: String = runtime_method()
+	var features: Dictionary = capabilities_for(method).get("renderer_features", {})
+	return bool(features.get("reflection_probes", false))
+
+
+static func planar_reflections_supported() -> bool:
+	var method: String = runtime_method()
+	var features: Dictionary = capabilities_for(method).get("renderer_features", {})
+	return bool(features.get("planar_reflections", false))
 
 
 static func requested_method() -> String:

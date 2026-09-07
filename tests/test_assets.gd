@@ -6,7 +6,7 @@ const FACILITIES: Array[String] = [
 ]
 const SCENERY: Array[String] = ["oak_tree", "pine_tree", "woodland_log", "woodland_boulder", "pergola", "fountain", "flower_bed", "topiary", "gazebo", "palm_tree", "bench", "decorative_pond", "desert_shrub", "dune_grass"]
 const PROPS: Array[String] = ["flag", "bridge", "bridge_walk", "bridge_cart", "sign"]
-const ACTIVITIES: Array[String] = ["walking", "swinging", "putting", "seated", "idle"]
+const ACTIVITIES: Array[String] = ["walking", "swinging", "putting", "seated", "idle", "address", "backswing", "contact", "follow_through"]
 const TIERED_FACILITIES: Array[String] = ["clubhouse", "driving_range", "restroom", "snack_kiosk", "cart_barn", "maintenance_shed"]
 
 func _init() -> void:
@@ -36,9 +36,16 @@ func _init() -> void:
 		checks += 1
 	golfer.free()
 	var cart_model: Node3D = AssetFactory.cart()
-	assert(cart_model.get_child_count() >= 8, "Cart silhouette missing wheels/roof")
+	assert(cart_model.get_child_count() >= 2, "Cart missing body/wheel hierarchy")
+	assert(cart_model.get_node_or_null("Wheels/WheelFL") != null, "Cart wheel FL pivot missing")
+	assert(cart_model.get_node_or_null("Wheels/WheelFR") != null, "Cart wheel FR pivot missing")
+	assert(cart_model.get_node_or_null("Wheels/WheelRL") != null, "Cart wheel RL pivot missing")
+	assert(cart_model.get_node_or_null("Wheels/WheelRR") != null, "Cart wheel RR pivot missing")
 	cart_model.free()
 	checks += 1
+	for wheel_path in ArchitectureManifest.contracts()["cart"]["dynamic_nodes"]:
+		assert(wheel_path.begins_with("Wheels/"), "Cart dynamic node should live under Wheels: " + wheel_path)
+		checks += 1
 	for entry in Catalog.scenery():
 		assert(float(entry.get("influence", 0.0)) >= 25.0 and float(entry.get("influence", 0.0)) <= 60.0, "Scenery influence out of range")
 		assert(float(entry.get("beauty", 0.0)) >= 8.0 and float(entry.get("beauty", 0.0)) <= 22.0, "Scenery beauty out of range")

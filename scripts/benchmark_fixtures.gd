@@ -59,7 +59,8 @@ static func per_frame(game: Node, scenario: String, frame_index: int) -> Diction
 	terrain.apply_brush(command)
 	var rebuild_started: int = Time.get_ticks_usec()
 	world.rebuild_dirty()
-	world.sync_objects()
+	# Brush edits do not mutate the object collection; matching the live commit
+	# path avoids benchmarking a full, unrelated foliage rebatch.
 	metrics.terrain_rebuild_ms = float(Time.get_ticks_usec() - rebuild_started) / 1000.0
 	metrics.scene_sync_ms = metrics.terrain_rebuild_ms
 	metrics.sim_ms = float(rebuild_started - started) / 1000.0

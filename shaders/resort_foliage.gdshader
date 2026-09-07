@@ -7,9 +7,17 @@ varying vec3 local_pos;
 void vertex() {
  local_pos=VERTEX;
  vec3 world=(MODEL_MATRIX*vec4(VERTEX,1.0)).xyz;
- float sway=sin(TIME*0.85+world.x*0.15+world.z*0.12);
- VERTEX.x+=sway*0.055*max(0.0,VERTEX.y-1.5);
- VERTEX.z+=cos(TIME*0.65+world.x*0.11)*0.025*max(0.0,VERTEX.y-1.5);
+ // UV.x = per-cluster phase, UV.y = branch/leaf wind weight (package 07).
+ float phase=UV.x*6.2831853;
+ float weight=clamp(UV.y,0.0,1.0);
+ if(weight<0.001){
+  weight=clamp((VERTEX.y-1.2)*0.35,0.0,1.0);
+ }
+ float sway=sin(TIME*0.85+world.x*0.15+world.z*0.12+phase);
+ float lift=sin(TIME*0.55+world.z*0.09+phase*0.5);
+ VERTEX.x+=sway*0.055*weight*max(0.0,VERTEX.y-1.2);
+ VERTEX.z+=lift*0.028*weight*max(0.0,VERTEX.y-1.2);
+ VERTEX.y+=abs(sway)*0.012*weight;
  leaf_light=COLOR.a;
 }
 void fragment() {

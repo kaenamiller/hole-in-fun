@@ -6,7 +6,9 @@ const STEP = 4.0
 const WIDTH = 1024.0
 const NODES = 257
 const SURFACE_NAMES = ["Rough", "Fairway", "Green", "Tee", "Sand", "Water", "Garden soil"]
-const SURFACE_COLORS = [Color("637f3d"), Color("8cab4e"), Color("adc665"), Color("94b557"), Color("dfcb9e"), Color("65aaa8"), Color("b18b60")]
+
+static func surface_colors() -> PackedColorArray:
+	return GraphicsPalette.SURFACE_COLORS
 const DEFAULT_ENTRANCE: Vector3 = Vector3(64.0, 0.0, 64.0)
 const DEFAULT_COST_MULTIPLIERS: Dictionary = {"raise": 1.0, "fairway": 1.0, "water": 1.0, "clear_tree": 1.0}
 const TREE_KINDS: Array[String] = ["oak_tree", "pine_tree", "palm_tree", "desert_shrub", "dune_grass"]
@@ -14,8 +16,9 @@ var entrance: Vector3 = DEFAULT_ENTRANCE
 var palette: PackedColorArray = _default_palette()
 var cost_multipliers: Dictionary = DEFAULT_COST_MULTIPLIERS.duplicate()
 var map_id: String = "cedar_house"
+var generation_seed: int = 730241
 var rough_name: String = "Rough"
-var water_color: Color = Color("65aaa8")
+var water_color: Color = GraphicsPalette.WATER_TINT_DEFAULT
 var heights = PackedFloat32Array()
 var surfaces = PackedByteArray()
 var water_levels = PackedFloat32Array()
@@ -34,6 +37,7 @@ var wear: float:
 		_set_uniform_wear(value)
 var next_id = 1
 var changed_chunks: Dictionary = {}
+var changed_surface_chunks: Dictionary = {}
 var _walk: AStarGrid2D
 var _cart: AStarGrid2D
 var _nav_revision = -1
@@ -41,15 +45,27 @@ var _nav_y = PackedFloat32Array()
 var _route_cache: Dictionary = {}
 var _beauty_cache: Dictionary = {}
 var _green_owner_map: PackedInt32Array = PackedInt32Array()
+var _fairway_owner_map: PackedInt32Array = PackedInt32Array()
+var _mowing_cache_revision: int = -1
 var _green_cells_cache: Dictionary = {}
 var _bunkers_cache: Array = []
 var _green_cache_revision: int = -1
 var _bunkers_cache_revision: int = -1
 var _water_points: PackedVector3Array = PackedVector3Array()
 var _water_cache_revision: int = -1
+var _water_body_ids: PackedInt32Array = PackedInt32Array()
+var _water_depth: PackedFloat32Array = PackedFloat32Array()
+var _water_shore_dist: PackedFloat32Array = PackedFloat32Array()
+var _water_dry_shore_dist: PackedFloat32Array = PackedFloat32Array()
+var _water_surface_cache: PackedFloat32Array = PackedFloat32Array()
+var _water_field_revision: int = -1
+var _water_dirty_full: bool = true
+var _water_dirty_rect: Rect2i = Rect2i()
+var course_features: Array = []
+var _contour_cache_revision: int = -1
 
 static func _default_palette() -> PackedColorArray:
-	return PackedColorArray(SURFACE_COLORS)
+	return PackedColorArray(GraphicsPalette.SURFACE_COLORS)
 
 func _init() -> void:
 	palette = _default_palette()
@@ -73,8 +89,11 @@ func touch() -> void:
 	_route_cache.clear()
 	_beauty_cache.clear()
 	_green_cache_revision = -1
+	_mowing_cache_revision = -1
 	_bunkers_cache_revision = -1
 	_water_cache_revision = -1
+	_water_field_revision = -1
+	_contour_cache_revision = -1
 
 func height_at(p: Vector3) -> float:
 	var gx = clampf(p.x / STEP, 0, CELLS - 0.0001)
@@ -298,9 +317,11 @@ func overnight_decay(has_maintenance_shed: bool) -> void:
 	for index in range(CELLS * CELLS):
 		var surface: int = int(surfaces[index])
 		if _maintained_surface(surface):
-			condition[index] = clampf(condition[index] - 0.01, 0.0, 1.0)
+			# Calendar weathering is intentionally gentle: dozens of calendar
+			# days pass during one actor-time round.
+			condition[index] = clampf(condition[index] - 0.00012, 0.0, 1.0)
 		if has_maintenance_shed and surface == 2:
-			condition[index] = clampf(condition[index] + 0.03, 0.0, 1.0)
+			condition[index] = clampf(condition[index] + 0.00008, 0.0, 1.0)
 
 func slope_at(p: Vector3) -> Vector2:
 	return Vector2(height_at(p+Vector3(2,0,0))-height_at(p-Vector3(2,0,0)),height_at(p+Vector3(0,0,2))-height_at(p-Vector3(0,0,2))) / 4.0
@@ -408,6 +429,7 @@ func plan_brush(mode: String, p: Vector3, radius: float, strength: float, paint:
 	return {"nodes":nodes,"cells":cells,"cost":ceilf(cost),"center":p,"radius":radius}
 
 func apply_brush(command: Dictionary, reverse: bool = false) -> void:
+	var water_bounds: Rect2 = Rect2()
 	for item in command.nodes:
 		heights[item[0]] = item[1] if reverse else item[2]
 		var gx = int(item[0])%NODES
@@ -415,13 +437,29 @@ func apply_brush(command: Dictionary, reverse: bool = false) -> void:
 		for dz in [-1,0]:
 			for dx in [-1,0]:
 				changed_chunks[Vector2i(clampi((gx+dx)/16,0,15),clampi((gz+dz)/16,0,15))] = true
+		var cell_x: float = float(gx) * STEP
+		var cell_z: float = float(gz) * STEP
+		water_bounds = water_bounds.merge(Rect2(cell_x, cell_z, STEP, STEP))
 	for item in command.cells:
 		surfaces[item[0]] = item[1] if reverse else item[2]
 		water_levels[item[0]] = item[3] if reverse else item[4]
 		if not reverse:
 			condition[item[0]] = 1.0
-		changed_chunks[Vector2i((int(item[0])%256)/16,(int(item[0])/256)/16)] = true
+		var chunk := Vector2i((int(item[0])%256)/16,(int(item[0])/256)/16)
+		changed_chunks[chunk] = true
+		changed_surface_chunks[chunk] = true
+		var cx: int = int(item[0]) % CELLS
+		var cz: int = int(item[0]) / CELLS
+		water_bounds = water_bounds.merge(Rect2(float(cx) * STEP, float(cz) * STEP, STEP, STEP))
 	touch()
+	if water_bounds.size != Vector2.ZERO:
+		mark_water_field_dirty(water_bounds)
+	elif command.has("bounds"):
+		mark_water_field_dirty(command.get("bounds", Rect2()))
+	elif command.has("center") and command.has("radius"):
+		var center: Vector3 = command.get("center", Vector3.ZERO)
+		var radius: float = float(command.get("radius", STEP))
+		mark_water_field_dirty(Rect2(center.x - radius, center.z - radius, radius * 2.0, radius * 2.0))
 
 func paint_disk(p: Vector3, radius: float, surface: int) -> void:
 	apply_brush(plan_brush("paint",p,radius,1,surface))
@@ -496,6 +534,60 @@ func green_cells(hole: Dictionary) -> PackedInt32Array:
 func green_owner(p: Vector3) -> int:
 	_rebuild_green_caches()
 	return _green_owner_map[_cell_index(p)]
+
+func fairway_owner(p: Vector3) -> int:
+	rebuild_mowing_maps()
+	return _fairway_owner_map[_cell_index(p)]
+
+func hole_by_id(hole_id: int) -> Dictionary:
+	for hole in holes:
+		if int(hole.get("id", -1)) == hole_id:
+			return hole
+	return {}
+
+func rebuild_mowing_maps() -> void:
+	if _mowing_cache_revision == revision:
+		return
+	_rebuild_green_caches()
+	_fairway_owner_map.resize(CELLS * CELLS)
+	_fairway_owner_map.fill(-1)
+	for hole in holes:
+		var hole_id: int = int(hole.get("id", -1))
+		var pattern: Dictionary = HoleMowing.effective_pattern(hole)
+		var authored: Variant = pattern.get("fairway_cells", [])
+		if authored is Array or authored is PackedInt32Array:
+			for cell_value in authored:
+				var index: int = int(cell_value)
+				if index < 0 or index >= CELLS * CELLS:
+					continue
+				if int(surfaces[index]) not in [1, 3]:
+					continue
+				var current: int = _fairway_owner_map[index]
+				if current < 0 or hole_id < current:
+					_fairway_owner_map[index] = hole_id
+	for index in range(CELLS * CELLS):
+		var surface: int = int(surfaces[index])
+		if surface not in [1, 3]:
+			continue
+		if _fairway_owner_map[index] >= 0:
+			continue
+		var owner: int = _nearest_corridor_hole_id(Vector3((index % CELLS + 0.5) * STEP, 0.0, (int(index / CELLS) + 0.5) * STEP))
+		_fairway_owner_map[index] = owner
+	_mowing_cache_revision = revision
+
+func _nearest_corridor_hole_id(point: Vector3) -> int:
+	if holes.is_empty():
+		return -1
+	var best_distance: float = INF
+	var best_id: int = -1
+	for hole in holes:
+		var corridor: PackedVector3Array = _hole_corridor_points(hole)
+		var distance: float = _distance_to_corridor(point, corridor)
+		var hole_id: int = int(hole.get("id", -1))
+		if distance < best_distance or (is_equal_approx(distance, best_distance) and hole_id < best_id):
+			best_distance = distance
+			best_id = hole_id
+	return best_id
 
 func on_green(p: Vector3, hole: Dictionary) -> bool:
 	return surface_at(p) == 2 and green_owner(p) == int(hole.get("id", -1))
@@ -784,6 +876,106 @@ func plan_green_contour(p: Vector3, radius: float, strength: float, raise: bool)
 				cost += absf(value - old) * 8.0
 	return {"nodes": nodes, "cells": [], "cost": ceilf(cost), "center": p, "radius": radius}
 
+func feature_by_id(feature_id: int) -> Dictionary:
+	for feature_value in course_features:
+		var feature: Dictionary = feature_value
+		if int(feature.get("id", -1)) == feature_id:
+			return feature.duplicate(true)
+	return {}
+
+func contour_features_for_chunk(chunk: Vector2i) -> Array:
+	var rect: Rect2 = Rect2(chunk.x * 16 * STEP, chunk.y * 16 * STEP, 16 * STEP, 16 * STEP)
+	var result: Array = []
+	for feature_value in course_features:
+		var feature: Dictionary = feature_value
+		if CourseContours.intersects_rect(feature, rect):
+			result.append(feature)
+	return result
+
+func boundary_distance_at(p: Vector3, kind: String = "") -> float:
+	var best: float = 1.0e9
+	for feature_value in course_features:
+		var feature: Dictionary = feature_value
+		if not kind.is_empty() and str(feature.get("kind", "")) != kind:
+			continue
+		best = minf(best, CourseContours.boundary_distance(Vector2(p.x, p.z), feature))
+	return best
+
+func signed_boundary_distance_at(p: Vector3, feature_id: int) -> float:
+	var feature: Dictionary = feature_by_id(feature_id)
+	if feature.is_empty():
+		return 1.0e9
+	return CourseContours.signed_boundary_distance(Vector2(p.x, p.z), feature)
+
+func water_body_at(p: Vector3) -> Dictionary:
+	return WaterField.sample(self, p)
+
+func ensure_water_field() -> void:
+	WaterField.flush_dirty(self)
+
+func active_water_body_ids() -> PackedInt32Array:
+	return WaterField.active_body_ids(self)
+
+func mark_water_field_dirty(bounds: Rect2 = Rect2()) -> void:
+	WaterField.mark_dirty(self, bounds)
+
+func plan_feature_contour(feature: Dictionary, apply_raster: bool = true, apply_profile: bool = true) -> Dictionary:
+	var reason: String = CourseContours.validate_feature(feature)
+	if not reason.is_empty():
+		return {"error": reason}
+	var raster: Dictionary = CourseContours.plan_raster(feature, self) if apply_raster else {"cells": [], "cost": 0.0, "bounds": CourseContours.feature_bounds(feature)}
+	var profile: Dictionary = CourseContours.plan_profile(feature, self) if apply_profile else {"nodes": [], "cost": 0.0}
+	var before_features: Array = []
+	var feature_id: int = int(feature.get("id", -1))
+	for existing in course_features:
+		if int(existing.get("id", -1)) == feature_id:
+			before_features.append((existing as Dictionary).duplicate(true))
+			break
+	var bounds: Rect2 = raster.get("bounds", Rect2())
+	return {
+		"kind": "contour",
+		"before_features": before_features,
+		"after_features": [feature.duplicate(true)],
+		"nodes": profile.get("nodes", []),
+		"cells": raster.get("cells", []),
+		"cost": float(raster.get("cost", 0.0)) + float(profile.get("cost", 0.0)),
+		"bounds": bounds,
+		"center": Vector3(bounds.position.x + bounds.size.x * 0.5, 0.0, bounds.position.y + bounds.size.y * 0.5),
+		"radius": maxf(bounds.size.x, bounds.size.y) * 0.5 + STEP,
+	}
+
+func apply_contour_command(command: Dictionary, reverse: bool = false) -> void:
+	apply_brush(command, reverse)
+	var replace_ids: Dictionary = {}
+	var incoming: Array = command.get("before_features", []) if reverse else command.get("after_features", [])
+	for feature_value in command.get("after_features", []):
+		replace_ids[int((feature_value as Dictionary).get("id", -1))] = true
+	for feature_value in command.get("before_features", []):
+		replace_ids[int((feature_value as Dictionary).get("id", -1))] = true
+	var next_features: Array = []
+	for feature_value in course_features:
+		var feature_id: int = int(feature_value.get("id", -1))
+		if not replace_ids.has(feature_id):
+			next_features.append((feature_value as Dictionary).duplicate(true))
+	for feature_value in incoming:
+		next_features.append((feature_value as Dictionary).duplicate(true))
+	course_features = next_features
+	_mark_contour_bounds(command.get("bounds", Rect2()))
+	_contour_cache_revision = -1
+
+func _mark_contour_bounds(bounds: Rect2) -> void:
+	if bounds.size == Vector2.ZERO:
+		return
+	var x0: int = clampi(int(bounds.position.x / STEP), 0, 255)
+	var x1: int = clampi(int((bounds.position.x + bounds.size.x) / STEP), 0, 255)
+	var z0: int = clampi(int(bounds.position.y / STEP), 0, 255)
+	var z1: int = clampi(int((bounds.position.y + bounds.size.y) / STEP), 0, 255)
+	for z in range(z0, z1 + 1):
+		for x in range(x0, x1 + 1):
+			var chunk: Vector2i = Vector2i(x / 16, z / 16)
+			changed_chunks[chunk] = true
+			changed_surface_chunks[chunk] = true
+
 func plan_bunker_shape(p: Vector3, radius: float, strength: float) -> Dictionary:
 	var nodes: Array = []
 	var x0: int = clampi(int((p.x - radius) / STEP), 0, CELLS - 1)
@@ -976,7 +1168,10 @@ func snapshot() -> Dictionary:
 		"holes": holes.duplicate(true), "objects": objects.duplicate(true),
 		"wear": course_wear(), "next_id": next_id,
 		"entrance": entrance, "palette": palette, "cost_multipliers": cost_multipliers.duplicate(),
-		"map_id": map_id, "rough_name": rough_name, "water_color": water_color,
+		"map_id": map_id, "generation_seed": generation_seed, "rough_name": rough_name, "water_color": water_color,
+		"mowing_version": HoleMowing.SCHEMA_VERSION,
+		"contours_version": CourseContours.SCHEMA_VERSION,
+		"course_features": course_features.duplicate(true),
 	}
 
 func restore(data: Dictionary) -> void:
@@ -988,7 +1183,13 @@ func restore(data: Dictionary) -> void:
 	else:
 		condition.resize(CELLS * CELLS)
 		condition.fill(1.0)
-	holes.assign(data.holes)
+	var restored_holes: Array = data.holes.duplicate(true)
+	for index in range(restored_holes.size()):
+		var hole: Dictionary = restored_holes[index]
+		if hole.has("mowing"):
+			hole["mowing"] = HoleMowing.sanitize_saved_mowing(hole["mowing"])
+		restored_holes[index] = hole
+	holes.assign(restored_holes)
 	objects.assign(data.objects)
 	next_id = data.next_id
 	entrance = Vector3(data.get("entrance", DEFAULT_ENTRANCE))
@@ -1001,11 +1202,15 @@ func restore(data: Dictionary) -> void:
 		for key in (data.cost_multipliers as Dictionary).keys():
 			cost_multipliers[key] = float((data.cost_multipliers as Dictionary)[key])
 	map_id = str(data.get("map_id", "cedar_house"))
+	generation_seed = int(data.get("generation_seed", Catalog.map(map_id).get("seed", 730241)))
 	rough_name = str(data.get("rough_name", "Rough"))
 	water_color = Color(data.get("water_color", Color("65aaa8")))
+	course_features = CourseContours.sanitize_saved_features(data.get("course_features", []))
 	_hole_condition_cache.clear()
 	_hole_condition_revision = -1
 	_hole_condition_minute = -1.0
+	_water_dirty_full = true
+	_water_dirty_rect = Rect2i()
 	touch()
 
 func starter_resort(full: bool = false) -> void:

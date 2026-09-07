@@ -22,7 +22,7 @@ const PATRON_SCORECARDS_CAP: int = 5
 const ENTRANCE: Vector3 = Vector3(64.0, 0.0, 64.0)
 const WALK_SPEED: float = 1.8
 const CART_SPEED: float = 6.5
-const MAX_SUBSTEP: float = 1.0
+const MAX_SUBSTEP: float = 6.0 # 0.1 actor-second at 1x
 ## Calendar seconds per actor-second at 1x.
 const SIM_RATE: float = 60.0
 ## Base visual pace multiplier at 1x. Chosen so an 18-hole round takes the
@@ -69,11 +69,12 @@ var candidates: Array[Dictionary] = []
 var groups: Array[Dictionary] = []
 var cash: float = 180000.0
 var day: int = 1
-var minute: float = 0.0
+var calendar_second: float = 0.0
+var minute: float = 0.0 # Deprecated compatibility alias for calendar_second.
 ## Time within the current calendar day (0..DAY_SIM_SECONDS) and monotonic
 ## actor-seconds since the resort opened, for physical durations spanning days.
 var _day_seconds: float = 0.0
-var _sim_elapsed: float = 0.0
+var _actor_elapsed_seconds: float = 0.0
 ## Monthly settlement counter; the view autosaves whenever it changes.
 var settlements: int = 0
 ## Master switch for walk-in demand; suspended arrivals still let active
@@ -135,7 +136,9 @@ const HISTORY_CAP: int = 365
 ## Demand was authored against the 36,000-second operating day; this converts
 ## the marketing demand model to the 800-second calendar day with headroom so
 ## relative demand differences stay visible in whole-guest targets.
-const DEMAND_SCALE: float = DAY_SIM_SECONDS / 36000.0 * 4.0
+const TARGET_ROUND_ACTOR_SECONDS: float = 900.0
+const AVERAGE_GROUP_SIZE: float = 2.5
+const TARGET_COURSE_UTILIZATION: float = 0.78
 const TODAY_SERIES_INTERVAL: float = DAY_SIM_SECONDS / 30.0
 const TODAY_SERIES_MAX: int = 60
 const FEEDBACK_CAP: int = 12
@@ -271,8 +274,9 @@ func setup(terrain_ref, sandbox_mode: bool, starter: bool, map_def: Dictionary =
 	cash = float(map_def.get("starting_cash", 180000.0 if starter else 350000.0))
 	day = 1
 	minute = 0.0
+	calendar_second = 0.0
 	_day_seconds = 0.0
-	_sim_elapsed = 0.0
+	_actor_elapsed_seconds = 0.0
 	settlements = 0
 	_period_arrivals = 0
 	_demand_carry = 0.0
@@ -420,8 +424,9 @@ func _tick_step(dt: float) -> void:
 	_tick_watchdogs(actor_dt)
 	_maybe_sample_today_series()
 	_day_seconds += dt
-	_sim_elapsed += actor_dt
-	minute = _day_seconds / 60.0
+	_actor_elapsed_seconds += actor_dt
+	calendar_second = _day_seconds
+	minute = calendar_second
 	_spawn_due_arrivals(dt)
 	while _day_seconds + 0.000001 >= DAY_SIM_SECONDS:
 		_day_seconds -= DAY_SIM_SECONDS
@@ -622,8 +627,13 @@ func rating_breakdown() -> Dictionary:
 func _demand_rate(calendar_day: int) -> float:
 	var demand: Dictionary = demand_factors()
 	var effective_rating: float = _effective_rating()
-	var base: float = (30.0 + awareness * 0.9) * (0.55 + effective_rating * 0.14)
-	base *= DEMAND_SCALE
+	# A hole is one pipeline slot. Capacity is expressed as golfers per
+	# calendar day at the target actor-time round length.
+	var actor_seconds_per_day: float = DAY_SIM_SECONDS / SIM_RATE
+	var base: float = float(_course_holes.size()) * AVERAGE_GROUP_SIZE * actor_seconds_per_day / TARGET_ROUND_ACTOR_SECONDS
+	base *= TARGET_COURSE_UTILIZATION
+	base *= clampf(0.45 + awareness / 100.0, 0.45, 1.45)
+	base *= clampf(0.55 + effective_rating * 0.12, 0.67, 1.15)
 	base *= SEASON_DEMAND[season_index_for(calendar_day)]
 	base *= float(demand.get("facilities", 1.0))
 	base *= float(demand.get("facility_quality", 1.0))
@@ -638,7 +648,7 @@ func _demand_rate(calendar_day: int) -> float:
 
 
 func _demand_arrival_target(calendar_day: int, minute_value: float) -> int:
-	return clampi(roundi(_demand_rate(calendar_day)), 1, 60)
+	return clampi(roundi(_demand_rate(calendar_day)), 0, 60)
 
 
 func _skill_bias() -> float:
@@ -763,7 +773,9 @@ func _course_par_total() -> int:
 
 
 func course_metrics_summary() -> Dictionary:
-	_refresh_hole_metrics_cache()
+	# UI reads must never launch hundreds of shot simulations synchronously.
+	# Metrics are refreshed explicitly (analysis/day rollover) and may be stale
+	# for the brief period after construction.
 	return _course_metrics_cache.duplicate(true)
 
 
@@ -784,16 +796,20 @@ func _refresh_hole_metrics_cache(force: bool = false) -> void:
 			var hole: Dictionary = hole_value
 			if bool(hole.get("open", true)):
 				holes.append(hole)
+	var metrics_by_id: Dictionary = {}
 	for hole in holes:
 		var hole_id: int = int(hole.get("id", -1))
 		if hole_id < 0:
 			continue
 		var cached: Dictionary = hole_metrics.get(hole_id, {})
 		if not force and int(cached.get("revision", -1)) == revision and cached.has("metrics"):
+			metrics_by_id[hole_id] = cached.metrics
 			continue
+		var computed: Dictionary = _shot_script.metrics(terrain, hole)
+		metrics_by_id[hole_id] = computed
 		hole_metrics[hole_id] = {
 			"revision": revision,
-			"metrics": _shot_script.metrics(terrain, hole),
+			"metrics": computed,
 		}
 	if holes.is_empty():
 		_course_metrics_cache.clear()
@@ -801,7 +817,7 @@ func _refresh_hole_metrics_cache(force: bool = false) -> void:
 		return
 	if force or _course_metrics_revision != revision or _course_metrics_cache.is_empty():
 		if _shot_script.has_method("course_metrics"):
-			_course_metrics_cache = _shot_script.course_metrics(terrain, holes)
+			_course_metrics_cache = _shot_script.course_metrics(terrain, holes, 30, 42, metrics_by_id)
 		_course_metrics_revision = revision
 
 
@@ -1016,15 +1032,14 @@ func _roll_day() -> void:
 	_settle_press_moments()
 	_decay_reputation()
 	_tick_campaigns()
-	_process_lodge_night()
 	_end_staff_day()
 	_settle_events()
 	day += 1
-	analytics.decay("traffic", 0.6)
-	analytics.decay("cart_traffic", 0.6)
-	analytics.decay("waiting", 0.5)
-	analytics.decay("landings", 0.7)
-	analytics.decay("hazard_landings", 0.7)
+	analytics.decay("traffic", 0.985)
+	analytics.decay("cart_traffic", 0.985)
+	analytics.decay("waiting", 0.98)
+	analytics.decay("landings", 0.995)
+	analytics.decay("hazard_landings", 0.995)
 	if terrain != null and terrain.has_method("overnight_decay"):
 		terrain.overnight_decay(_has_facility("maintenance_shed"))
 	_facility_warn_day.clear()
@@ -1034,7 +1049,8 @@ func _roll_day() -> void:
 	_last_series_sample_minute = -TODAY_SERIES_INTERVAL
 	_refresh_course()
 	_refresh_facilities(false)
-	_refresh_hole_metrics_cache()
+	# Course analysis is explicitly requested by the shot lab. Running it here
+	# would block the day transition for seconds on a developed course.
 	if month_index_for(day) != month_index_for(day - 1):
 		_roll_month()
 	if season_index_for(day) != season_index_for(day - 1):
@@ -1055,6 +1071,7 @@ func _roll_month() -> void:
 	day = settled_day
 	_settle_wages_and_upkeep()
 	_settle_loans()
+	_review_staff_month()
 	var net: float = _today_revenue - _today_expense
 	_record(0.0, "monthly_summary", "%s net $%.0f" % [date_string_for(settled_day), net])
 	_append_monthly_history(net, settled_day)
@@ -1590,7 +1607,8 @@ func on_construction(center: Vector3, radius: float, removed_hole_id: int = -1) 
 				var player_turn: int = int(group.get("player_turn", 0))
 				if player_turn >= 0 and player_turn < member_ids.size() and int(member_ids[player_turn]) == int(guest.get("id", -1)):
 					guest["ball_pos"] = guest["pos"]
-	# Every route is rebuilt because a route can cross edited cells without either endpoint being nearby.
+	# Only routes touching the edited area need rebuilding. Other current paths
+	# remain valid and avoid an A* query storm during brush interaction.
 	for group in groups:
 		if str(group.get("state", "")) == "departed":
 			continue
@@ -1600,11 +1618,16 @@ func on_construction(center: Vector3, radius: float, removed_hole_id: int = -1) 
 		if current_hole_id >= 0 and _hole_by_id(current_hole_id).is_empty():
 			hard_stop_groups[int(group.get("id", -1))] = true
 			continue
+		if not affected_groups.has(int(group.get("id", -1))):
+			continue
 		if not _rebuild_group_routes(group):
 			hard_stop_groups[int(group.get("id", -1))] = true
 	for worker in staff:
 		var worker_pos: Vector3 = worker.get("pos", _entrance())
 		var worker_destination: Vector3 = worker.get("destination", worker_pos)
+		var current_route: PackedVector3Array = worker.get("route", PackedVector3Array())
+		if not _point_in_edit(worker_pos, center, radius) and not _point_in_edit(worker_destination, center, radius) and not _path_intersects_edit(current_route, center, radius):
+			continue
 		var worker_route: PackedVector3Array = _raw_route(worker_pos, worker_destination, false)
 		if not worker_route.is_empty():
 			worker["route"] = worker_route
@@ -1636,7 +1659,7 @@ func on_construction(center: Vector3, radius: float, removed_hole_id: int = -1) 
 
 func snapshot() -> Dictionary:
 	return {
-		"version": 1, "tick_accumulator": _tick_accumulator, "guests": guests.duplicate(true), "staff": staff.duplicate(true), "candidates": candidates.duplicate(true), "groups": groups.duplicate(true),
+		"version": 2, "tick_accumulator": _tick_accumulator, "guests": guests.duplicate(true), "staff": staff.duplicate(true), "candidates": candidates.duplicate(true), "groups": groups.duplicate(true),
 		"cash": cash, "day": day, "minute": minute, "sandbox": sandbox, "prices": prices.duplicate(true),
 		"rating": rating,
 		"awareness": awareness,
@@ -1646,7 +1669,7 @@ func snapshot() -> Dictionary:
 		"rating_sum": _rating_sum,
 		"rating_weight": _rating_weight,
 		"loyalty_mailer_days": _loyalty_mailer_days,
-		"day_seconds": _day_seconds, "sim_elapsed": _sim_elapsed, "settlements": settlements,
+		"day_seconds": _day_seconds, "actor_elapsed_seconds": _actor_elapsed_seconds, "settlements": settlements,
 		"game_over": game_over, "game_over_reason": game_over_reason,
 		"period_arrivals": _period_arrivals, "demand_carry": _demand_carry, "arrivals_enabled": arrivals_enabled,
 		"ledger": ledger.duplicate(true), "loans": loans.duplicate(true), "scheduled_events": scheduled_events.duplicate(true),
@@ -1703,14 +1726,23 @@ func restore(data: Dictionary) -> void:
 		_normalize_worker(worker)
 	candidates.assign(data.get("candidates", []).duplicate(true))
 	groups.assign(data.get("groups", []).duplicate(true))
+	for group in groups:
+		if str(group.get("state", "")) == "lodged":
+			group["state"] = "departing"
+			group["wants_lodging"] = false
+			group["lodge_nights"] = 0
+			group["destination"] = _entrance()
+			group["route"] = PackedVector3Array()
+			group["route_index"] = 0
 	cash = float(data.get("cash", 180000.0))
 	day = int(data.get("day", 1))
-	minute = float(data.get("minute", 0.0))
+	calendar_second = float(data.get("calendar_second", data.get("minute", _day_seconds)))
+	minute = calendar_second
 	_day_seconds = float(data.get("day_seconds", minute * 60.0))
 	var elapsed_fallback: float = (float(day - 1) * DAY_SIM_SECONDS + _day_seconds) / SIM_RATE
-	_sim_elapsed = float(data.get("sim_elapsed", elapsed_fallback))
-	if not data.has("game_over") and data.has("sim_elapsed"):
-		_sim_elapsed /= SIM_RATE
+	_actor_elapsed_seconds = float(data.get("actor_elapsed_seconds", elapsed_fallback))
+	if not data.has("actor_elapsed_seconds") and data.has("sim_elapsed"):
+		_actor_elapsed_seconds = float(data.get("sim_elapsed", 0.0)) / SIM_RATE
 	game_over = bool(data.get("game_over", false))
 	game_over_reason = str(data.get("game_over_reason", ""))
 	settlements = int(data.get("settlements", maxi(0, month_index_for(day))))
@@ -2808,7 +2840,7 @@ func _tick_tee_queue(group: Dictionary, dt: float) -> void:
 	_hole_queues[hole_id] = queue
 	_hole_occupancy[hole_id] = int(group["id"])
 	group["state"] = "playing"
-	group["hole_start_minute"] = _sim_elapsed / 60.0
+	group["hole_start_minute"] = _actor_elapsed_seconds / 60.0
 	group["cart_parked"] = true
 	group["player_turn"] = 0
 	group["play_phase"] = "ready"
@@ -3430,7 +3462,9 @@ func _settle_events() -> void:
 				still_playing = true
 				break
 		var last_attended: int = int(event.get("last_attended_day", window_end))
-		var hard_grace: int = window_end + maxi(40, _course_holes.size() * 6)
+		var round_days: int = ceili(TARGET_ROUND_ACTOR_SECONDS * SIM_RATE / DAY_SIM_SECONDS)
+		var field_waves: float = float(maxi(1, int(event.get("target", 1)))) / maxf(1.0, float(_course_holes.size()) * AVERAGE_GROUP_SIZE)
+		var hard_grace: int = window_end + ceili(float(round_days) * (1.5 + field_waves))
 		var stalled: bool = day > window_end and attendance_stalled(event, day, last_attended)
 		if still_playing and day < hard_grace and not stalled:
 			continue
@@ -3506,7 +3540,6 @@ func _reset_arrivals() -> void:
 			_arrival_target = clampi(int(round(float(_arrival_target) * penalty)), 1, 60)
 		_next_arrival_in = minf(_next_arrival_in, DAY_SIM_SECONDS / maxf(1.0, float(_arrival_target)))
 	_refill_candidates()
-	_release_lodge_guests_to_tee()
 	_schedule_member_arrivals()
 
 
@@ -3521,9 +3554,8 @@ func _add_event_hole(group: Dictionary) -> void:
 
 
 func attendance_stalled(event: Dictionary, current_day: int, last_attended: int) -> bool:
-	# Attendance is stalled once a fortnight has passed without a new group
-	# reaching the tee, with a minimum evaluation window after the event.
-	return current_day - last_attended >= 14 and current_day >= int(event.get("day", 0)) + 21
+	var round_days: int = ceili(TARGET_ROUND_ACTOR_SECONDS * SIM_RATE / DAY_SIM_SECONDS)
+	return current_day - last_attended >= round_days and current_day >= int(event.get("day", 0)) + round_days
 
 
 func _update_grade() -> void:
@@ -4450,15 +4482,10 @@ func _training_active(worker: Dictionary) -> bool:
 
 
 func _worker_on_shift(worker: Dictionary) -> bool:
-	# Shifts follow the monotonic actor clock, not the compressed calendar.
-	# Actor hour zero is 6:00 a.m.; early and late cover consecutive 8-hour blocks.
+	# Staggered actor-time duty cycles: 15 minutes on, 5 minutes off.
 	var shift: String = str(worker.get("shift", "full"))
-	if shift == "full":
-		return true
-	var hour: float = fmod(_sim_elapsed / 3600.0, 24.0)
-	if shift == "early":
-		return hour < 8.0
-	return hour >= 8.0 and hour < 16.0
+	var offset: float = {"early": 0.0, "full": 300.0, "late": 600.0}.get(shift, 300.0)
+	return fmod(_actor_elapsed_seconds + offset, 1200.0) < 900.0
 
 
 func _tick_worker_vitals(worker: Dictionary, dt: float, minute_dt: float) -> void:
@@ -4475,6 +4502,12 @@ func _tick_worker_vitals(worker: Dictionary, dt: float, minute_dt: float) -> voi
 	if activity in ["maintaining", "cleaning", "serving", "patrolling", "teaching", "supervising"]:
 		worker["worked_today"] = true
 		worker["fatigue"] = minf(1.0, float(worker.get("fatigue", 0.0)) + minute_dt * fatigue_rate)
+		var experience_rate: float = 0.004 / 45.0
+		if (worker.get("traits", []) as Array).has("quick_learner"):
+			experience_rate *= 1.35
+		if _mentor_near(worker):
+			experience_rate *= 1.25
+		worker["experience"] = minf(1.0, float(worker.get("experience", 0.0)) + minute_dt * experience_rate)
 		if float(worker.get("fatigue", 0.0)) > FATIGUE_WARN_THRESHOLD and not bool(worker.get("_fatigue_warned", false)):
 			worker["_fatigue_warned"] = true
 			post("warning", "staff", "%s is exhausted" % str(worker.get("name", "Worker")), worker.get("pos", _entrance()), {"kind": "staff", "id": int(worker.get("id", -1))})
@@ -4527,13 +4560,6 @@ func _end_staff_day() -> void:
 				worker["activity"] = "available"
 				post("success", "staff", "%s completed training" % str(worker.get("name", "Worker")), worker.get("pos", _entrance()), {"kind": "staff", "id": worker_id})
 			continue
-		if bool(worker.get("worked_today", false)):
-			var exp_gain: float = 0.004
-			if (worker.get("traits", []) as Array).has("quick_learner"):
-				exp_gain *= 1.35
-			if _mentor_near(worker):
-				exp_gain *= 1.25
-			worker["experience"] = minf(1.0, float(worker.get("experience", 0.0)) + exp_gain)
 		# Fatigue follows actor time and recovers continuously while off shift;
 		# calendar rollover only closes the accounting record.
 		worker["minutes_working_today"] = 0.0
@@ -4541,6 +4567,12 @@ func _end_staff_day() -> void:
 		worker["minutes_off_today"] = 0.0
 		worker["worked_today"] = false
 		worker.erase("_fatigue_warned")
+
+
+func _review_staff_month() -> void:
+	for index in range(staff.size() - 1, -1, -1):
+		var worker: Dictionary = staff[index]
+		var worker_id: int = int(worker.get("id", -1))
 		var morale: float = float(worker.get("morale", 0.7))
 		if morale < 0.3:
 			worker["low_morale_days"] = int(worker.get("low_morale_days", 0)) + 1
@@ -4938,14 +4970,23 @@ func _begin_post_round(group: Dictionary) -> void:
 
 func _begin_departure_or_lodge(group: Dictionary) -> void:
 	if bool(group.get("wants_lodging", false)) and int(group.get("lodge_nights", 0)) > 0 and _lodge_rooms_available() >= int(group.get("size", 1)):
-		_send_to_lodge(group)
-		return
+		_charge_lodge_booking(group)
 	_release_group_resources(group)
 	group["state"] = "departing"
 	_set_group_destination(group, _entrance(), bool(group.get("cart", false)))
 	for guest in _group_guests(group):
 		guest["activity"] = "departing"
 		guest["thought"] = "Heading home after the round."
+
+
+func _charge_lodge_booking(group: Dictionary) -> void:
+	var nights: int = maxi(1, int(group.get("lodge_nights", 1)))
+	var room_rate: float = price("room", {"day": day})
+	for guest in _group_guests(group):
+		for _night in range(nights):
+			_guest_purchase(guest, room_rate, "lodging", "Lodge booking")
+	group["lodge_nights"] = 0
+	group["wants_lodging"] = false
 
 
 func _send_to_lodge(group: Dictionary) -> void:
@@ -5307,7 +5348,7 @@ func _record_hole_stats(group: Dictionary, hole: Dictionary) -> void:
 	stats["strokes_sum"] = float(stats.get("strokes_sum", 0.0)) + stroke_total / maxf(1.0, float(group.get("size", 1)))
 	stats["rounds"] = int(stats.get("rounds", 0)) + 1
 	stats["hazards"] = int(stats.get("hazards", 0)) + int(group.get("hole_hazards", 0))
-	var hole_minutes: float = maxf(0.0, _sim_elapsed / 60.0 - float(group.get("hole_start_minute", _sim_elapsed / 60.0)))
+	var hole_minutes: float = maxf(0.0, _actor_elapsed_seconds / 60.0 - float(group.get("hole_start_minute", _actor_elapsed_seconds / 60.0)))
 	stats["minutes_sum"] = float(stats.get("minutes_sum", 0.0)) + hole_minutes
 	group["hole_hazards"] = 0
 

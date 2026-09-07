@@ -58,6 +58,7 @@ static func _generate_attempt(definition: Dictionary, seed_value: int, preview: 
 	var terrain: TerrainModel = TerrainModel.new()
 	var map_id: String = str(definition.get("id", "blank_meadow"))
 	terrain.map_id = map_id
+	terrain.generation_seed = seed_value
 	terrain.entrance = Vector3(definition.get("entrance", TerrainModel.DEFAULT_ENTRANCE))
 	terrain.rough_name = str(definition.get("rough_name", "Rough"))
 	if definition.has("palette"):

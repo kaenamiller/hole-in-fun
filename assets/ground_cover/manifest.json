@@ -1,0 +1,194 @@
+{
+  "generator_version": "1.0.0",
+  "global_seed": 524326,
+  "lod_thresholds": {
+    "near_end": 95.0,
+    "far_begin": 82.0,
+    "far_end": 420.0
+  },
+  "materials": {
+    "foliage_families": [
+      "rough_tuft",
+      "bank_reed",
+      "shrub",
+      "flower"
+    ],
+    "stone_families": [
+      "small_stone"
+    ],
+    "litter_material": "course.rough"
+  },
+  "variants": [
+    {
+      "family": "rough_tuft",
+      "variant": 0,
+      "seed": 525127,
+      "paths": {
+        "near": "ground_cover/rough_tuft_v0_near.gltf",
+        "far": "ground_cover/rough_tuft_v0_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 20,
+          "seed": 525127
+        },
+        "far": {
+          "triangles": 12,
+          "seed": 525127
+        }
+      }
+    },
+    {
+      "family": "rough_tuft",
+      "variant": 1,
+      "seed": 525224,
+      "paths": {
+        "near": "ground_cover/rough_tuft_v1_near.gltf",
+        "far": "ground_cover/rough_tuft_v1_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 20,
+          "seed": 525224
+        },
+        "far": {
+          "triangles": 12,
+          "seed": 525224
+        }
+      }
+    },
+    {
+      "family": "bank_reed",
+      "variant": 0,
+      "seed": 525128,
+      "paths": {
+        "near": "ground_cover/bank_reed_v0_near.gltf",
+        "far": "ground_cover/bank_reed_v0_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 14,
+          "seed": 525128
+        },
+        "far": {
+          "triangles": 8,
+          "seed": 525128
+        }
+      }
+    },
+    {
+      "family": "shrub",
+      "variant": 0,
+      "seed": 525129,
+      "paths": {
+        "near": "ground_cover/shrub_v0_near.gltf",
+        "far": "ground_cover/shrub_v0_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 48,
+          "seed": 525129
+        },
+        "far": {
+          "triangles": 24,
+          "seed": 525129
+        }
+      }
+    },
+    {
+      "family": "shrub",
+      "variant": 1,
+      "seed": 525226,
+      "paths": {
+        "near": "ground_cover/shrub_v1_near.gltf",
+        "far": "ground_cover/shrub_v1_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 48,
+          "seed": 525226
+        },
+        "far": {
+          "triangles": 24,
+          "seed": 525226
+        }
+      }
+    },
+    {
+      "family": "flower",
+      "variant": 0,
+      "seed": 525130,
+      "paths": {
+        "near": "ground_cover/flower_v0_near.gltf",
+        "far": "ground_cover/flower_v0_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 38,
+          "seed": 525130
+        },
+        "far": {
+          "triangles": 14,
+          "seed": 525130
+        }
+      }
+    },
+    {
+      "family": "leaf_litter",
+      "variant": 0,
+      "seed": 525131,
+      "paths": {
+        "near": "ground_cover/leaf_litter_v0_near.gltf",
+        "far": "ground_cover/leaf_litter_v0_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 96,
+          "seed": 525131
+        },
+        "far": {
+          "triangles": 60,
+          "seed": 525131
+        }
+      }
+    },
+    {
+      "family": "small_stone",
+      "variant": 0,
+      "seed": 525132,
+      "paths": {
+        "near": "ground_cover/small_stone_v0_near.gltf",
+        "far": "ground_cover/small_stone_v0_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 24,
+          "seed": 525132
+        },
+        "far": {
+          "triangles": 12,
+          "seed": 525132
+        }
+      }
+    },
+    {
+      "family": "small_stone",
+      "variant": 1,
+      "seed": 525229,
+      "paths": {
+        "near": "ground_cover/small_stone_v1_near.gltf",
+        "far": "ground_cover/small_stone_v1_far.gltf"
+      },
+      "stats": {
+        "near": {
+          "triangles": 24,
+          "seed": 525229
+        },
+        "far": {
+          "triangles": 12,
+          "seed": 525229
+        }
+      }
+    }
+  ]
+}

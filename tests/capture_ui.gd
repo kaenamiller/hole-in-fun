@@ -59,7 +59,11 @@ func _run() -> void:
 			game.ui.show_log()
 			await _shot("%s_log" % tag)
 			game.ui.show_system()
-			await _shot("%s_system" % tag)
+			await _shot("%s_system_save" % tag)
+			game.ui._system_section = "settings"
+			game.ui.show_system()
+			await _shot("%s_system_settings" % tag)
+			game.ui._close_system()
 		game.ui.show_tab("Reports")
 		await _shot("%s_reports" % tag)
 	print("CAPTURE_UI_DONE")

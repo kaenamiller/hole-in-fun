@@ -45,7 +45,7 @@ Extend the group state machine with two optional stops:
 
 ### Lodge and multi-day stays
 
-Groups arriving with `wants_lodging` (probability `0.12 + 0.2 × (grade − 1)` when rooms are free) check in, and instead of departing at end of round they route to the lodge and enter `lodged`. `_end_day` keeps lodged groups (they are exempt from the closing-time refund), charges `prices.room` (120) per guest per night, resets needs, and at `_reset_arrivals` re-enters them as `to_tee` groups with `paid = false` so they pay again (or replay fee). Stays last 1–3 nights. Lodged guests count against the 100-guest cap. Saves already persist groups, so no new lifecycle code for restore.
+Groups with `wants_lodging` reserve one to three nights when rooms are available. The complete stay is charged as ancillary revenue at departure; it never pauses, refreshes, stores, or re-queues active golfers. Legacy saves migrate `lodged` groups into normal departure.
 
 ### Facility state additions
 

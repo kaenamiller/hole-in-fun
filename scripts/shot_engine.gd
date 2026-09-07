@@ -409,7 +409,7 @@ static func metrics(terrain, hole: Dictionary, count: int = 30, seed_value: int 
 		"fun": fun,
 	}
 
-static func course_metrics(terrain, holes: Array, count: int = 30, seed_value: int = 42) -> Dictionary:
+static func course_metrics(terrain, holes: Array, count: int = 30, seed_value: int = 42, cached_metrics: Dictionary = {}) -> Dictionary:
 	var open_holes: Array = []
 	for hole_value in holes:
 		var hole: Dictionary = hole_value
@@ -429,7 +429,10 @@ static func course_metrics(terrain, holes: Array, count: int = 30, seed_value: i
 	var signature_fun: float = -1.0
 
 	for hole in open_holes:
-		var hole_metrics: Dictionary = metrics(terrain, hole, count, seed_value + int(hole.get("id", 0)) * 9973)
+		var hole_id: int = int(hole.get("id", 0))
+		var hole_metrics: Dictionary = cached_metrics.get(hole_id, {})
+		if hole_metrics.is_empty():
+			hole_metrics = metrics(terrain, hole, count, seed_value + hole_id * 9973)
 		per_hole.append(hole_metrics)
 		expert_total += float(hole_metrics.get("expert_avg", 0.0))
 		beginner_total += float(hole_metrics.get("beginner_avg", 0.0))

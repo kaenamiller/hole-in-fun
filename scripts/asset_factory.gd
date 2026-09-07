@@ -8,8 +8,12 @@ static var _materials: Dictionary = {}
 static var _meshes: Dictionary = {}
 static var _foliage_material: ShaderMaterial
 static var _asset_cache: Dictionary = {}
+static var _shipped_scenes: Dictionary = {}
 static var _grain_texture: NoiseTexture2D
+static var _occlusion_texture: NoiseTexture2D
 static var foliage_lod_distance: float = 60.0
+static var gen2_trees_enabled: bool = true
+static var architecture_lod_distance: float = 80.0
 
 
 const GREEN := Color("#69883d")
@@ -31,17 +35,36 @@ const PANTS := Color("#394858")
 const WHITE := Color("#f7f2df")
 
 static func build(kind: String, variant: int = 0) -> Node3D:
-	var root: Node3D = Node3D.new()
-	root.name = kind
 	var cache_key: String = kind+":"+str(variant)
 	if _asset_cache.has(cache_key):
 		var cached: Dictionary = _asset_cache[cache_key]
-		root.scale=cached.scale
-		for part in cached.parts: _mesh(root,part.mesh,part.material)
-		return root
+		if cached.has("scene_path"):
+			var shipped_cached: Node3D = (_load_shipped_scene(str(cached.scene_path)) as PackedScene).instantiate()
+			shipped_cached.name = kind
+			return shipped_cached
+		var cached_root: Node3D = Node3D.new()
+		cached_root.name = kind
+		cached_root.scale = cached.scale
+		for part in cached.parts:
+			var instance: MeshInstance3D = _mesh(cached_root, part.mesh, part.material)
+			if part.has("visibility_begin"):
+				instance.visibility_range_begin = float(part.visibility_begin)
+			if part.has("visibility_end"):
+				instance.visibility_range_end = float(part.visibility_end)
+		return cached_root
+	var shipped: Node3D = _instantiate_shipped_architecture(kind, variant)
+	if shipped != null:
+		shipped.name = kind
+		var scene_path: String = ArchitectureManifest.scene_path(kind, variant)
+		_asset_cache[cache_key] = {"scene_path": scene_path}
+		return shipped
+	var root: Node3D = Node3D.new()
+	root.name = kind
+	var architecture_key: String = ArchitectureManifest.resolve_asset_key(kind)
+	var skip_dress: bool = not architecture_key.is_empty()
 	match kind:
 		"clubhouse":
-			_build_clubhouse(root, variant)
+			ArchitectureMesh.build_clubhouse(root, variant)
 		"driving_range":
 			_build_driving_range(root, variant)
 		"restroom":
@@ -101,14 +124,27 @@ static func build(kind: String, variant: int = 0) -> Node3D:
 		"stake":
 			_build_stake(root, variant)
 		"bridge", "bridge_walk", "bridge_cart":
-			_build_bridge(root, variant)
+			ArchitectureMesh.build_bridge(root, variant)
 		"sign":
 			_build_sign(root, variant)
 		_:
 			_build_generic_prop(root, variant)
-	_dress_facility(root,kind)
-	_bake_static(root,cache_key)
+	if not skip_dress:
+		_dress_facility(root, kind)
+	if root.get_meta("skip_bake", false):
+		_cache_gen2(root, cache_key)
+	elif architecture_key.is_empty() or ArchitectureManifest.contracts()[architecture_key].get("static_bake", true):
+		_bake_static(root, cache_key)
 	return root
+
+static func clear_tree_cache() -> void:
+	TreeAssets.clear_cache()
+	for key in _asset_cache.keys():
+		if str(key).contains("oak_tree") or str(key).contains("pine_tree"):
+			_asset_cache.erase(key)
+	for key in _meshes.keys():
+		if str(key).begins_with("tree_shadow:"):
+			_meshes.erase(key)
 
 # Collapse all static pieces sharing a material into one draw, then reuse meshes.
 static func _bake_static(root: Node3D, key: String) -> void:
@@ -134,8 +170,24 @@ static func _bake_static(root: Node3D, key: String) -> void:
 			importer.generate_lods(foliage_lod_distance, 25.0, [])
 			mesh=importer.get_mesh()
 		parts.append({"mesh":mesh,"material":group.material})
-		_mesh(root,mesh,group.material)
+		var draw_material: Material = group.material
+		if group.material is StandardMaterial3D and group.material != _foliage():
+			draw_material = (group.material as StandardMaterial3D).duplicate()
+			(draw_material as StandardMaterial3D).vertex_color_use_as_albedo = true
+		_mesh(root,mesh,draw_material)
 	_asset_cache[key]={"scale":root.scale,"parts":parts}
+
+static func _cache_gen2(root: Node3D, key: String) -> void:
+	var parts: Array = []
+	for child in root.get_children():
+		if child is MeshInstance3D and child.mesh != null:
+			parts.append({
+				"mesh": child.mesh,
+				"material": child.material_override,
+				"visibility_begin": child.visibility_range_begin,
+				"visibility_end": child.visibility_range_end,
+			})
+	_asset_cache[key] = {"scale": root.scale, "parts": parts, "gen2": true}
 
 static func _gather_static(node: Node3D, parent: Transform3D, groups: Dictionary) -> void:
 	for child in node.get_children():
@@ -156,7 +208,15 @@ static func _gather_static(node: Node3D, parent: Transform3D, groups: Dictionary
 					group.verts.append(transform*vertices[i])
 					group.normals.append((normal_basis*a[Mesh.ARRAY_NORMAL][i]).normalized() if a[Mesh.ARRAY_NORMAL] != null else Vector3.UP)
 					group.uvs.append(a[Mesh.ARRAY_TEX_UV][i] if a[Mesh.ARRAY_TEX_UV] != null else Vector2.ZERO)
-					group.colors.append(a[Mesh.ARRAY_COLOR][i] if a[Mesh.ARRAY_COLOR] != null else Color.WHITE)
+					var base_color: Color = a[Mesh.ARRAY_COLOR][i] if a[Mesh.ARRAY_COLOR] != null else Color.WHITE
+					var local_normal: Vector3 = (normal_basis*a[Mesh.ARRAY_NORMAL][i]).normalized() if a[Mesh.ARRAY_NORMAL] != null else Vector3.UP
+					var local_pos: Vector3 = transform*vertices[i]
+					if mat is StandardMaterial3D and mat != _foliage():
+						var occlusion: float = _vertex_self_occlusion(local_normal, local_pos)
+						var albedo: Color = (mat as StandardMaterial3D).albedo_color
+						group.colors.append(Color(albedo.r * occlusion, albedo.g * occlusion, albedo.b * occlusion, 1.0))
+					else:
+						group.colors.append(base_color)
 		_gather_static(child,transform,groups)
 
 static func _dress_facility(root: Node3D, kind: String) -> void:
@@ -242,33 +302,58 @@ static func staff_golfer(role: String, variant: int = 0) -> Node3D:
 	return root
 
 static func cart() -> Node3D:
+	var shipped: Node3D = _instantiate_shipped_architecture("cart", 0)
+	if shipped != null:
+		return shipped
 	var root: Node3D = Node3D.new()
-	root.name = "GolfCart"
-	var chassis_mat: StandardMaterial3D = _material(WHITE)
-	var trim_mat: StandardMaterial3D = _material(DEEP_GREEN)
-	_mesh(root, _box(Vector3(1.60, 0.22, 2.35)), chassis_mat, Vector3(0, 0.58, 0))
-	_mesh(root, _box(Vector3(1.44, 0.08, 2.10)), _material(WOOD), Vector3(0, 0.72, 0.20))
-	for x in [-0.72, 0.72]:
-		for z in [-0.72, 0.72]:
-			_mesh(root, _cylinder(0.30, 0.16, WOOD_DARK, 14), _material(WOOD_DARK), Vector3(x, 0.34, z), Vector3.ONE, Vector3(0, 0, PI / 2.0))
-	for x in [-0.62, 0.62]:
-		_mesh(root, _box(Vector3(0.07, 1.28, 0.07)), trim_mat, Vector3(x, 1.30, 0.20))
-	_mesh(root, _box(Vector3(1.62, 0.10, 2.08)), _material(CREAM), Vector3(0, 1.94, 0.20))
-	_mesh(root, _box(Vector3(1.30, 0.08, 0.08)), trim_mat, Vector3(0, 1.00, -0.70))
-	_mesh(root, _cylinder(0.18, 0.04, BRASS, 12), _material(BRASS), Vector3(0.42, 1.13, -0.80), Vector3.ONE, Vector3(PI / 2.0, 0, 0))
+	ArchitectureMesh.build_cart(root)
 	return root
 
-static func animate_golfer(node: Node3D, activity: String, phase: float) -> void:
+
+static func _load_shipped_scene(path: String) -> Resource:
+	if _shipped_scenes.has(path):
+		return _shipped_scenes[path]
+	if not ResourceLoader.exists(path):
+		return null
+	var scene: Resource = load(path)
+	_shipped_scenes[path] = scene
+	return scene
+
+
+static func _instantiate_shipped_architecture(kind: String, variant: int) -> Node3D:
+	if not ArchitectureManifest.has_shipped_asset(kind):
+		return null
+	var path: String = ArchitectureManifest.scene_path(kind, variant)
+	var scene: Resource = _load_shipped_scene(path)
+	if scene == null or not scene is PackedScene:
+		return null
+	return (scene as PackedScene).instantiate() as Node3D
+
+static func animate_golfer(node: Node3D, activity: String, phase: float, aim_yaw: float = NAN, simplified: bool = false) -> void:
 	if node == null:
 		return
 	var torso: Node3D = node.get_node_or_null("Torso") as Node3D
+	var head: Node3D = node.get_node_or_null("Head") as Node3D
 	var arm_l: Node3D = node.get_node_or_null("ArmL") as Node3D
 	var arm_r: Node3D = node.get_node_or_null("ArmR") as Node3D
 	var leg_l: Node3D = node.get_node_or_null("LegL") as Node3D
 	var leg_r: Node3D = node.get_node_or_null("LegR") as Node3D
 	var club: Node3D = node.get_node_or_null("Club") as Node3D
+	if simplified:
+		for part in [arm_l, arm_r, leg_l, leg_r, club]:
+			var part_node: Node3D = part as Node3D
+			if part_node != null:
+				part_node.rotation = Vector3.ZERO
+		if torso != null:
+			torso.rotation.y = 0.0
+		if head != null:
+			head.rotation = Vector3.ZERO
+		return
 	var sway: float = sin(phase * TAU)
 	var stride: float = sin(phase * TAU)
+	var head_aim: float = 0.0
+	if not is_nan(aim_yaw):
+		head_aim = clampf(aim_yaw - node.rotation.y, -0.75, 0.75)
 	if activity == "walking":
 		if leg_l != null:
 			leg_l.rotation.x = stride * 0.45
@@ -280,6 +365,57 @@ static func animate_golfer(node: Node3D, activity: String, phase: float) -> void
 			arm_r.rotation.x = stride * 0.28
 		if torso != null:
 			torso.rotation.z = sway * 0.035
+		if head != null:
+			head.rotation.y = head_aim * 0.25
+	elif activity == "address":
+		if torso != null:
+			torso.rotation.x = -0.12
+		if arm_l != null:
+			arm_l.rotation.z = -0.35
+			arm_l.rotation.x = -0.18
+		if arm_r != null:
+			arm_r.rotation.z = 0.35
+			arm_r.rotation.x = -0.18
+		if club != null:
+			club.rotation.z = -0.15 - phase * 0.12
+		if head != null:
+			head.rotation.y = head_aim * 0.55
+	elif activity == "backswing":
+		var back: float = sin(clampf(phase, 0.0, 1.0) * PI * 0.5)
+		if arm_l != null:
+			arm_l.rotation.z = -0.45 - back * 1.05
+		if arm_r != null:
+			arm_r.rotation.z = 0.45 + back * 1.05
+		if torso != null:
+			torso.rotation.y = -back * 0.42
+		if club != null:
+			club.rotation.z = -0.25 - back * 1.25
+		if head != null:
+			head.rotation.y = head_aim * 0.35
+	elif activity == "contact":
+		var hit: float = clampf(phase, 0.0, 1.0)
+		if arm_l != null:
+			arm_l.rotation.z = -0.95 - hit * 0.35
+		if arm_r != null:
+			arm_r.rotation.z = 0.95 + hit * 0.35
+		if torso != null:
+			torso.rotation.y = hit * 0.55
+		if club != null:
+			club.rotation.z = -0.85 - hit * 0.55
+		if head != null:
+			head.rotation.y = head_aim * 0.65
+	elif activity == "follow_through":
+		var follow: float = sin(clampf(phase, 0.0, 1.0) * PI * 0.5)
+		if arm_l != null:
+			arm_l.rotation.z = -0.25 - follow * 0.45
+		if arm_r != null:
+			arm_r.rotation.z = 0.25 + follow * 0.45
+		if torso != null:
+			torso.rotation.y = 0.35 + follow * 0.45
+		if club != null:
+			club.rotation.z = -0.15 - follow * 0.35
+		if head != null:
+			head.rotation.y = head_aim * 0.8
 	elif activity == "swinging":
 		var swing: float = sin(clamp(phase, 0.0, 1.0) * PI)
 		if arm_l != null:
@@ -290,6 +426,8 @@ static func animate_golfer(node: Node3D, activity: String, phase: float) -> void
 			torso.rotation.y = swing * 0.65
 		if club != null:
 			club.rotation.z = -0.45 - swing * 1.4
+		if head != null:
+			head.rotation.y = head_aim * 0.6
 	elif activity == "putting":
 		if torso != null:
 			torso.rotation.x = -0.48
@@ -299,6 +437,8 @@ static func animate_golfer(node: Node3D, activity: String, phase: float) -> void
 			arm_r.rotation.z = 0.28 - sway * 0.30
 		if club != null:
 			club.rotation.z = sway * 0.20
+		if head != null:
+			head.rotation.y = head_aim * 0.45
 	elif activity == "mowing":
 		if torso != null:
 			torso.rotation.x = -0.35 + sway * 0.08
@@ -324,15 +464,22 @@ static func animate_golfer(node: Node3D, activity: String, phase: float) -> void
 		if arm_r != null:
 			arm_r.rotation.z = 0.20
 	else:
-		for part in [arm_l, arm_r, leg_l, leg_r, torso, club]:
+		for part in [arm_l, arm_r, leg_l, leg_r, torso, club, head]:
 			var part_node: Node3D = part as Node3D
 			if part_node != null:
 				part_node.rotation = Vector3.ZERO
+		if leg_l != null:
+			leg_l.position.y = 0.0
+		if leg_r != null:
+			leg_r.position.y = 0.0
+
+static func _family(family_id: String) -> StandardMaterial3D:
+	return MaterialLibrary.material(family_id)
 
 static func _build_clubhouse(root: Node3D, variant: int) -> void:
-	var wall: StandardMaterial3D = _material(CREAM)
-	var accent: StandardMaterial3D = _material(TERRACOTTA)
-	var wood: StandardMaterial3D = _material(WOOD_DARK)
+	var wall: StandardMaterial3D = _family("arch.plaster")
+	var accent: StandardMaterial3D = _family("arch.roof")
+	var wood: StandardMaterial3D = _family("arch.timber")
 	_mesh(root, _box(Vector3(13.0, 0.35, 9.5)), _material(WOOD_DARK), Vector3(0, 0.18, 0))
 	_mesh(root, _box(Vector3(12.0, 5.0, 8.6)), wall, Vector3(0, 2.82, 0))
 	_roof(root, 14.0, 10.0, 1.15, 5.40, accent)
@@ -377,8 +524,8 @@ static func _build_clubhouse(root: Node3D, variant: int) -> void:
 		_mesh(root, _box(Vector3(0.18, 4.8, 0.18)), _material(BRASS), Vector3(-7.0, 5.2, -0.8))
 
 static func _build_driving_range(root: Node3D, variant: int) -> void:
-	var turf: StandardMaterial3D = _material(FAIRWAY)
-	var frame: StandardMaterial3D = _material(WOOD_DARK)
+	var turf: StandardMaterial3D = _family("course.fairway")
+	var frame: StandardMaterial3D = _family("arch.timber")
 	var net: StandardMaterial3D = _material(Color("#b7ccb2"), 1.0)
 	_mesh(root, _box(Vector3(14.0, 0.25, 8.0)), turf, Vector3(0, 0.12, 0))
 	_mesh(root, _box(Vector3(13.0, 0.16, 1.6)), _material(WOOD), Vector3(0, 0.34, -2.8))
@@ -468,7 +615,7 @@ static func _build_maintenance_shed(root: Node3D, variant: int) -> void:
 		_mesh(root, _cylinder(0.35, 0.55, DEEP_GREEN, 10), _material(DEEP_GREEN), Vector3(-3.2, 0.5, 2.8), Vector3.ONE, Vector3(0, 0, PI / 2.0))
 
 static func _build_putting_green(root: Node3D, variant: int) -> void:
-	var turf: StandardMaterial3D = _material(FAIRWAY)
+	var turf: StandardMaterial3D = _family("course.fairway")
 	_mesh(root, _cylinder(5.5, 0.18, FAIRWAY, 24), turf, Vector3(0, 0.09, 0))
 	_mesh(root, _cylinder(0.12, 0.9, WOOD_DARK, 8), _material(WOOD_DARK), Vector3(0, 0.45, 0))
 	_mesh(root, _box(Vector3(0.55, 0.04, 0.38)), _material(WHITE), Vector3(0.35, 0.92, 0))
@@ -611,16 +758,47 @@ static func _canopy(variant: int, pine: bool = false) -> ArrayMesh:
 	return mesh
 
 static func _build_oak_tree(root: Node3D, variant: int) -> void:
+	if _build_gen2_tree(root, "oak", variant):
+		return
 	root.scale=Vector3.ONE*(2.8+(variant%4)*0.16)
-	_mesh(root,_cylinder(0.23,3.2,WOOD_DARK,16),_material(WOOD_DARK),Vector3(0,1.6,0))
+	_mesh(root,_cylinder(0.23,3.2,WOOD_DARK,16),_family("prop.bark"),Vector3(0,1.6,0))
 	for side in [-1,1]:
-		_mesh(root,_cylinder(0.12,1.8,WOOD,12),_material(WOOD),Vector3(side*0.42,2.25,0),Vector3.ONE,Vector3(0,0,side*-0.48))
+		_mesh(root,_cylinder(0.12,1.8,WOOD,12),_family("arch.timber"),Vector3(side*0.42,2.25,0),Vector3.ONE,Vector3(0,0,side*-0.48))
 	_mesh(root,_canopy(variant),_foliage())
 
 static func _build_pine_tree(root: Node3D, variant: int) -> void:
+	if _build_gen2_tree(root, "pine", variant):
+		return
 	root.scale=Vector3.ONE*(2.6+(variant%4)*0.13)
-	_mesh(root,_cylinder(0.20,4.1,WOOD_DARK,16),_material(WOOD_DARK),Vector3(0,2.05,0))
+	_mesh(root,_cylinder(0.20,4.1,WOOD_DARK,16),_family("prop.bark"),Vector3(0,2.05,0))
 	_mesh(root,_canopy(variant,true),_foliage())
+
+static func _build_gen2_tree(root: Node3D, species: String, variant: int) -> bool:
+	if not gen2_trees_enabled or not TreeAssets.available():
+		return false
+	var v: int = variant % 4
+	var thresholds: Dictionary = TreeAssets.lod_thresholds()
+	root.scale = Vector3.ONE * TreeAssets.variant_scale(species, v)
+	var bark_material: StandardMaterial3D = _family("prop.bark")
+	var foliage_material: ShaderMaterial = _foliage()
+	var lod_ranges: Array = [
+		{"lod": "near", "begin": 0.0, "end": float(thresholds.get("near_end", 85.0))},
+		{"lod": "mid", "begin": float(thresholds.get("mid_begin", 75.0)), "end": float(thresholds.get("mid_end", 190.0))},
+		{"lod": "far", "begin": float(thresholds.get("far_begin", 175.0)), "end": float(thresholds.get("far_end", 950.0))},
+	]
+	for entry in lod_ranges:
+		var bark: ArrayMesh = TreeAssets.load_part(species, v, str(entry.lod), "bark")
+		var foliage: ArrayMesh = TreeAssets.load_part(species, v, str(entry.lod), "foliage")
+		if bark == null or foliage == null:
+			return false
+		var bark_instance: MeshInstance3D = _mesh(root, bark, bark_material)
+		bark_instance.visibility_range_begin = float(entry.begin)
+		bark_instance.visibility_range_end = float(entry.end)
+		var foliage_instance: MeshInstance3D = _mesh(root, foliage, foliage_material)
+		foliage_instance.visibility_range_begin = float(entry.begin)
+		foliage_instance.visibility_range_end = float(entry.end)
+	root.set_meta("skip_bake", true)
+	return true
 
 static func _build_desert_shrub(root: Node3D, variant: int) -> void:
 	root.scale = Vector3.ONE * (1.2 + (variant % 3) * 0.1)
@@ -642,8 +820,9 @@ static func _build_log(root: Node3D, variant: int) -> void:
 	_mesh(root, _cylinder(0.32, 0.08, CREAM, 10), _material(CREAM), Vector3(1.42, 0.48, 0), Vector3.ONE, Vector3(0, 0, PI / 2.0))
 
 static func _build_boulder(root: Node3D, variant: int) -> void:
-	_mesh(root, _sphere(1.0, Color("#777b70")), _material(Color("#777b70")), Vector3(0, 0.72, 0), Vector3(1.45, 0.82, 1.05))
-	_mesh(root, _sphere(0.35, Color("#9a9c8a")), _material(Color("#9a9c8a")), Vector3(-0.35, 1.30, -0.40), Vector3(1.2, 0.35, 0.8))
+	var stone: StandardMaterial3D = _family("prop.stone")
+	_mesh(root, _sphere(1.0, Color("#777b70")), stone, Vector3(0, 0.72, 0), Vector3(1.45, 0.82, 1.05))
+	_mesh(root, _sphere(0.35, Color("#9a9c8a")), stone, Vector3(-0.35, 1.30, -0.40), Vector3(1.2, 0.35, 0.8))
 
 static func _build_pergola(root: Node3D, variant: int) -> void:
 	var wood: StandardMaterial3D = _material(WOOD_DARK)
@@ -660,10 +839,14 @@ static func _build_fountain(root: Node3D, variant: int) -> void:
 	_mesh(root, _cylinder(1.35, 0.18, WATER, 20), _material(WATER), Vector3(0, 0.28, 0))
 	_mesh(root, _cylinder(0.24, 1.35, CREAM, 14), _material(CREAM), Vector3(0, 0.95, 0))
 	_mesh(root, _cylinder(0.62, 0.18, CREAM, 16), _material(CREAM), Vector3(0, 1.62, 0))
-	_mesh(root, _sphere(0.18, WATER), _material(WATER), Vector3(0, 1.88, 0))
+	var spray_anchor := Node3D.new()
+	spray_anchor.name = "SprayAnchor"
+	spray_anchor.position = Vector3(0, 1.88, 0)
+	root.add_child(spray_anchor)
+	_mesh(spray_anchor, _sphere(0.18, WATER), _material(WATER), Vector3(0, 0.0, 0))
 	for a in range(0, 360, 45):
 		var radians: float = deg_to_rad(float(a))
-		_mesh(root, _sphere(0.10, WATER), _material(WATER), Vector3(cos(radians) * 0.72, 1.36, sin(radians) * 0.72))
+		_mesh(spray_anchor, _sphere(0.10, WATER), _material(WATER), Vector3(cos(radians) * 0.72, -0.52, sin(radians) * 0.72))
 
 static func _build_flower_bed(root: Node3D, variant: int) -> void:
 	_mesh(root,_box(Vector3(4.2,0.22,1.7)),_material(WOOD),Vector3(0,0.11,0))
@@ -721,7 +904,7 @@ static func _build_palm(root: Node3D, variant: int) -> void:
 	_mesh(root,_sphere(0.4,WOOD_DARK),_material(WOOD_DARK),Vector3(-0.33,6.3,0))
 
 static func _build_bench(root: Node3D, variant: int) -> void:
-	var wood: StandardMaterial3D = _material(WOOD)
+	var wood: StandardMaterial3D = _family("arch.timber")
 	_mesh(root, _box(Vector3(3.2, 0.22, 0.58)), wood, Vector3(0, 1.05, 0))
 	_mesh(root, _box(Vector3(3.2, 0.22, 0.58)), wood, Vector3(0, 1.60, 0.20), Vector3.ONE, Vector3(-0.28, 0, 0))
 	for x in [-1.2, 1.2]:
@@ -736,7 +919,8 @@ static func _build_pond(root: Node3D, variant: int) -> void:
 
 static func _build_flag(root: Node3D, variant: int) -> void:
 	_mesh(root, _cylinder(0.035, 2.7, CREAM, 8), _material(CREAM), Vector3(0, 1.35, 0))
-	_mesh(root, _box(Vector3(0.70, 0.38, 0.05)), _material(TERRACOTTA), Vector3(0.34, 2.35, 0.0), Vector3.ONE, Vector3(0, 0, 0.05))
+	var cloth := _mesh(root, _box(Vector3(0.70, 0.38, 0.05)), _material(TERRACOTTA), Vector3(0.34, 2.35, 0.0), Vector3.ONE, Vector3(0, 0, 0.05))
+	cloth.name = "Cloth"
 	_mesh(root, _cylinder(0.22, 0.08, CREAM, 12), _material(CREAM), Vector3(0, 0.06, 0))
 
 static func _build_stake(root: Node3D, variant: int) -> void:
@@ -827,6 +1011,127 @@ static func _roof(root: Node3D, width: float, depth: float, thickness: float, y:
 
 
 
+static func tree_shadow_mesh(pine: bool, variant: int = 0) -> ArrayMesh:
+	var key: String = "tree_shadow:%s:%d" % [str(pine), variant % 4]
+	if _meshes.has(key):
+		return _meshes[key] as ArrayMesh
+	if gen2_trees_enabled:
+		var shipped: ArrayMesh = TreeAssets.shadow_mesh(pine, variant)
+		if shipped != null:
+			_meshes[key] = shipped
+			return shipped
+	if _meshes.has("tree_shadow:%s:0" % str(pine)):
+		return _meshes["tree_shadow:%s:0" % str(pine)] as ArrayMesh
+	var legacy_key: String = "tree_shadow:%s" % str(pine)
+	if _meshes.has(legacy_key):
+		return _meshes[legacy_key] as ArrayMesh
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var indices := PackedInt32Array()
+	if pine:
+		_append_shadow_cone(verts, normals, indices, Vector3(0, 2.0, 0), Vector3(1.05, 2.2, 1.05), 10)
+		_append_shadow_cone(verts, normals, indices, Vector3(0, 3.35, 0), Vector3(0.82, 1.55, 0.82), 10)
+		_append_shadow_cone(verts, normals, indices, Vector3(0, 4.35, 0), Vector3(0.55, 1.15, 0.55), 8)
+		_append_shadow_cylinder(verts, normals, indices, Vector3(0, 1.05, 0), 0.18, 2.1, 8)
+	else:
+		_append_shadow_sphere(verts, normals, indices, Vector3(0, 3.15, 0), Vector3(1.55, 1.25, 1.55), 12)
+		_append_shadow_sphere(verts, normals, indices, Vector3(0, 4.05, 0), Vector3(1.05, 0.95, 1.05), 10)
+		_append_shadow_sphere(verts, normals, indices, Vector3(0.55, 2.85, 0.35), Vector3(0.75, 0.72, 0.75), 8)
+		_append_shadow_cylinder(verts, normals, indices, Vector3(0, 0.95, 0), 0.21, 1.9, 8)
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_meshes[key] = mesh
+	_meshes[legacy_key] = mesh
+	return mesh
+
+static func _append_shadow_sphere(
+	verts: PackedVector3Array,
+	normals: PackedVector3Array,
+	indices: PackedInt32Array,
+	center: Vector3,
+	scale_value: Vector3,
+	segments: int,
+) -> void:
+	var base: int = verts.size()
+	var source: Array = _sphere(1.0, Color.WHITE, segments).get_mesh_arrays()
+	var sv: PackedVector3Array = source[Mesh.ARRAY_VERTEX]
+	var sn: PackedVector3Array = source[Mesh.ARRAY_NORMAL]
+	var mesh_indices: PackedInt32Array = source[Mesh.ARRAY_INDEX]
+	for i in range(sv.size()):
+		verts.append(center + sv[i] * scale_value)
+		normals.append((sn[i] / scale_value).normalized())
+	for idx in mesh_indices:
+		indices.append(base + idx)
+
+static func _append_shadow_cone(
+	verts: PackedVector3Array,
+	normals: PackedVector3Array,
+	indices: PackedInt32Array,
+	center: Vector3,
+	scale_value: Vector3,
+	segments: int,
+) -> void:
+	var base: int = verts.size()
+	var source: Array = _cone(1.0, 2.0, Color.WHITE, segments).get_mesh_arrays()
+	var sv: PackedVector3Array = source[Mesh.ARRAY_VERTEX]
+	var sn: PackedVector3Array = source[Mesh.ARRAY_NORMAL]
+	var mesh_indices: PackedInt32Array = source[Mesh.ARRAY_INDEX]
+	for i in range(sv.size()):
+		verts.append(center + sv[i] * scale_value)
+		normals.append((sn[i] / scale_value).normalized())
+	for idx in mesh_indices:
+		indices.append(base + idx)
+
+static func _append_shadow_cylinder(
+	verts: PackedVector3Array,
+	normals: PackedVector3Array,
+	indices: PackedInt32Array,
+	center: Vector3,
+	radius: float,
+	height: float,
+	segments: int,
+) -> void:
+	var base: int = verts.size()
+	var source: Array = _cylinder(radius, height, Color.WHITE, segments).get_mesh_arrays()
+	var sv: PackedVector3Array = source[Mesh.ARRAY_VERTEX]
+	var sn: PackedVector3Array = source[Mesh.ARRAY_NORMAL]
+	var mesh_indices: PackedInt32Array = source[Mesh.ARRAY_INDEX]
+	for i in range(sv.size()):
+		verts.append(center + sv[i])
+		normals.append(sn[i])
+	for idx in mesh_indices:
+		indices.append(base + idx)
+
+static func _vertex_self_occlusion(normal: Vector3, position: Vector3) -> float:
+	var cavity: float = clampf(1.0 - normal.y, 0.0, 1.0)
+	var overhang: float = clampf((1.2 - position.y) * 0.18, 0.0, 0.35)
+	var inset: float = clampf(absf(normal.x * normal.z) * 0.55, 0.0, 0.22)
+	return clampf(1.0 - cavity * 0.28 - overhang - inset, 0.48, 1.0)
+
+static func _tint_with_occlusion(color: Color, occlusion: float) -> Color:
+	return Color(color.r * occlusion, color.g * occlusion, color.b * occlusion, color.a)
+
+static func _occlusion_texture_resource() -> NoiseTexture2D:
+	if _occlusion_texture == null:
+		_occlusion_texture = NoiseTexture2D.new()
+		_occlusion_texture.width = 128
+		_occlusion_texture.height = 128
+		_occlusion_texture.seamless = true
+		var noise := FastNoiseLite.new()
+		noise.frequency = 0.24
+		noise.fractal_octaves = 4
+		_occlusion_texture.noise = noise
+		var ramp := Gradient.new()
+		ramp.set_color(0, Color(0.42, 0.42, 0.42))
+		ramp.set_color(1, Color.WHITE)
+		_occlusion_texture.color_ramp = ramp
+	return _occlusion_texture
+
 static func _mesh(parent: Node3D, mesh: Mesh, material: Material, position_value: Vector3 = Vector3.ZERO, scale_value: Vector3 = Vector3.ONE, rotation_value: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var instance: MeshInstance3D = MeshInstance3D.new()
 	instance.mesh = mesh
@@ -838,15 +1143,18 @@ static func _mesh(parent: Node3D, mesh: Mesh, material: Material, position_value
 	return instance
 
 static func apply_season(index: int) -> void:
-	# Seasonal foliage tint on the shared green materials: 0=Spring 1=Summer 2=Fall 3=Winter.
-	var targets: Array[Color] = [Color("#5d8a52"), Color("#3f7040"), Color("#8a6a34"), Color("#e8edf2")]
-	var mixes: Array[float] = [0.55, 0.0, 0.75, 0.85]
-	var clamped: int = clampi(index, 0, 3)
-	_foliage().set_shader_parameter("season_color",targets[clamped])
-	_foliage().set_shader_parameter("season_mix",mixes[clamped]*0.75)
+	var clamped: int = GraphicsPalette.clamp_season(index)
+	_foliage().set_shader_parameter("season_color", GraphicsPalette.foliage_season_target(clamped))
+	_foliage().set_shader_parameter("season_mix", GraphicsPalette.foliage_season_mix(clamped))
+	MaterialLibrary.apply_season(clamped)
+	var mix_amount: float = GraphicsPalette.foliage_season_mix_raw(clamped)
 	for base_color in [GREEN, DEEP_GREEN]:
 		var material := _material(base_color)
-		material.albedo_color = base_color.lerp(targets[clamped], mixes[clamped])
+		var roughness_before: float = material.roughness
+		var metallic_before: float = material.metallic
+		material.albedo_color = base_color.lerp(GraphicsPalette.foliage_season_target(clamped), mix_amount)
+		material.roughness = roughness_before
+		material.metallic = metallic_before
 
 static func _material(color: Color, roughness: float = 0.82, metallic: float = 0.0) -> StandardMaterial3D:
 	var key: String = color.to_html(false) + ":" + str(roughness) + ":" + str(metallic)
@@ -873,6 +1181,10 @@ static func _material(color: Color, roughness: float = 0.82, metallic: float = 0
 		material.albedo_texture=_grain_texture
 		material.uv1_triplanar=true
 		material.uv1_scale=Vector3(0.5,2.0,0.5) if color in [WOOD,WOOD_DARK] else Vector3.ONE*0.7
+		material.ao_enabled = true
+		material.ao_texture = _occlusion_texture_resource()
+		material.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+		material.ao_light_affect = 0.62
 	_materials[key] = material
 	return material
 

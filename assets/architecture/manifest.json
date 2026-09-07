@@ -1,0 +1,171 @@
+{
+	"assets": {
+		"bridge": {
+			"catalog_id": "bridge",
+			"catalog_radius": 3.2,
+			"dynamic_nodes": [],
+			"footprint": {
+				"x": 4.8,
+				"y": 1.55,
+				"z": 3.0
+			},
+			"kind_aliases": [
+				"bridge",
+				"bridge_walk",
+				"bridge_cart"
+			],
+			"material_families": [
+				"arch.timber",
+				"prop.stone"
+			],
+			"pivot": "center_origin_feet_y0",
+			"rotation_y_default": 0.0,
+			"static_bake": true,
+			"tiers": 1,
+			"variants": [
+				{
+					"bounds": {
+						"position": [
+							-2.4042501449585,
+							0.0155446529388428,
+							-2.25
+						],
+						"size": [
+							4.80850028991699,
+							1.65945529937744,
+							4.5
+						]
+					},
+					"lod_count": 3,
+					"scene": "res://assets/architecture/bridge/v0.tscn",
+					"variant": 0
+				}
+			]
+		},
+		"cart": {
+			"catalog_id": "cart",
+			"catalog_radius": 1.4,
+			"dynamic_nodes": [
+				"Wheels/WheelFL",
+				"Wheels/WheelFR",
+				"Wheels/WheelRL",
+				"Wheels/WheelRR"
+			],
+			"footprint": {
+				"x": 1.62,
+				"y": 1.94,
+				"z": 2.35
+			},
+			"kind_aliases": [
+				"cart",
+				"golf_cart"
+			],
+			"material_families": [
+				"arch.timber"
+			],
+			"pivot": "center_origin_feet_y0",
+			"rotation_y_default": 0.0,
+			"static_bake": false,
+			"tiers": 1,
+			"variants": [
+				{
+					"bounds": {
+						"position": [
+							-0.813824951648712,
+							-0.292478412389755,
+							-1.18009996414185
+						],
+						"size": [
+							1.62764990329742,
+							2.28247833251953,
+							2.43316006660461
+						]
+					},
+					"lod_count": 0,
+					"scene": "res://assets/architecture/cart/v0.tscn",
+					"variant": 0
+				}
+			]
+		},
+		"clubhouse": {
+			"catalog_id": "clubhouse",
+			"catalog_radius": 9.0,
+			"dynamic_nodes": [],
+			"footprint": {
+				"x": 12.0,
+				"y": 5.35,
+				"z": 8.6
+			},
+			"kind_aliases": [
+				"clubhouse"
+			],
+			"material_families": [
+				"arch.plaster",
+				"arch.timber",
+				"arch.roof",
+				"prop.stone"
+			],
+			"pivot": "center_origin_feet_y0",
+			"rotation_y_default": 0.0,
+			"static_bake": true,
+			"tiers": 3,
+			"variants": [
+				{
+					"bounds": {
+						"position": [
+							-7.15071487426758,
+							-0.059999942779541,
+							-6.12255001068115
+						],
+						"size": [
+							14.3014297485352,
+							9.9529857635498,
+							12.7259502410889
+						]
+					},
+					"lod_count": 9,
+					"scene": "res://assets/architecture/clubhouse/v0.tscn",
+					"variant": 0
+				},
+				{
+					"bounds": {
+						"position": [
+							-7.15071487426758,
+							-0.059999942779541,
+							-6.12255001068115
+						],
+						"size": [
+							17.5014305114746,
+							9.9529857635498,
+							12.7259502410889
+						]
+					},
+					"lod_count": 9,
+					"scene": "res://assets/architecture/clubhouse/v1.tscn",
+					"variant": 1
+				},
+				{
+					"bounds": {
+						"position": [
+							-8.60424995422363,
+							-0.059999942779541,
+							-6.12255001068115
+						],
+						"size": [
+							18.9549655914307,
+							9.9529857635498,
+							12.7259502410889
+						]
+					},
+					"lod_count": 10,
+					"scene": "res://assets/architecture/clubhouse/v2.tscn",
+					"variant": 2
+				}
+			]
+		}
+	},
+	"generator_version": "1.0.0",
+	"pivot": "center_origin_feet_y0",
+	"seed": 598054,
+	"tool": "godot-native"
+}

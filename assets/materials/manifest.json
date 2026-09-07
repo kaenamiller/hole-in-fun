@@ -1,0 +1,147 @@
+{
+  "generator_version": "1.0.0",
+  "global_seed": 270374,
+  "families": [
+    {
+      "id": "course.fairway",
+      "folder": "fairway",
+      "resolution": 512,
+      "meters_per_repeat": 2.0,
+      "base_roughness": 0.88,
+      "palette_hex": "#8cab4e",
+      "seam_score": 0.1855,
+      "albedo_gradient": 0.001,
+      "seed": 11588303237455523833
+    },
+    {
+      "id": "course.rough",
+      "folder": "rough",
+      "resolution": 512,
+      "meters_per_repeat": 1.5,
+      "base_roughness": 0.92,
+      "palette_hex": "#637f3d",
+      "seam_score": 0.2051,
+      "albedo_gradient": 0.001,
+      "seed": 12764150953348822941
+    },
+    {
+      "id": "course.sand",
+      "folder": "sand",
+      "resolution": 512,
+      "meters_per_repeat": 0.8,
+      "base_roughness": 0.94,
+      "palette_hex": "#dfcb9e",
+      "seam_score": 0.1465,
+      "albedo_gradient": 0.0009,
+      "seed": 16495403646458314116
+    },
+    {
+      "id": "course.gravel",
+      "folder": "gravel",
+      "resolution": 512,
+      "meters_per_repeat": 0.5,
+      "base_roughness": 0.9,
+      "palette_hex": "#b18b60",
+      "seam_score": 0.2969,
+      "albedo_gradient": 0.0012,
+      "seed": 1525804898847450686
+    },
+    {
+      "id": "prop.stone",
+      "folder": "stone",
+      "resolution": 512,
+      "meters_per_repeat": 1.2,
+      "base_roughness": 0.85,
+      "palette_hex": "#777b70",
+      "seam_score": 0.2305,
+      "albedo_gradient": 0.0012,
+      "seed": 15827269130493984292
+    },
+    {
+      "id": "arch.plaster",
+      "folder": "plaster",
+      "resolution": 341,
+      "meters_per_repeat": 1.8,
+      "base_roughness": 0.86,
+      "palette_hex": "#e2d3ad",
+      "seam_score": 0.217,
+      "albedo_gradient": 0.0006,
+      "seed": 6323175204641199569
+    },
+    {
+      "id": "prop.bark",
+      "folder": "bark",
+      "resolution": 512,
+      "meters_per_repeat": 0.6,
+      "base_roughness": 0.91,
+      "palette_hex": "#4e3326",
+      "seam_score": 0.7383,
+      "albedo_gradient": 0.0023,
+      "seed": 7574467181378731305
+    },
+    {
+      "id": "arch.timber",
+      "folder": "timber",
+      "resolution": 341,
+      "meters_per_repeat": 1.4,
+      "base_roughness": 0.84,
+      "palette_hex": "#8b5a3c",
+      "seam_score": 0.695,
+      "albedo_gradient": 0.0023,
+      "seed": 3081554577827383416
+    },
+    {
+      "id": "arch.roof",
+      "folder": "roof",
+      "resolution": 341,
+      "meters_per_repeat": 0.9,
+      "base_roughness": 0.89,
+      "palette_hex": "#75604a",
+      "seam_score": 0.1437,
+      "albedo_gradient": 0.0009,
+      "seed": 843043596133597916
+    }
+  ],
+  "architecture_trim": {
+    "resolution": 1024,
+    "seam_score": 202.8314,
+    "regions": {
+      "plaster": {
+        "id": "arch.plaster",
+        "uv_rect": [
+          0.0,
+          0.0,
+          1.0,
+          0.3330078125
+        ],
+        "meters_per_repeat": 1.8
+      },
+      "timber": {
+        "id": "arch.timber",
+        "uv_rect": [
+          0.0,
+          0.3330078125,
+          1.0,
+          0.3330078125
+        ],
+        "meters_per_repeat": 1.4
+      },
+      "roof": {
+        "id": "arch.roof",
+        "uv_rect": [
+          0.0,
+          0.666015625,
+          1.0,
+          0.3330078125
+        ],
+        "meters_per_repeat": 0.9
+      }
+    }
+  },
+  "channels": {
+    "albedo": "sRGB color",
+    "roughness": "linear data (grayscale)",
+    "normal": "linear tangent-space (+Y up, Compatibility)",
+    "height": "linear displacement source"
+  }
+}

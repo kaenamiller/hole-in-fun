@@ -1,5 +1,8 @@
 extends Node3D
 
+const EffectManagerClass = preload("res://scripts/cosmetic_effect_manager.gd")
+const ReflectionProbesClass = preload("res://scripts/graphics_reflection_probes.gd")
+
 var terrain: TerrainModel
 var sim: ResortSimulation
 var world: TerrainView
@@ -31,11 +34,16 @@ var show_grid = false
 var service_range = 90.0
 var sound_enabled = true
 var pause_on_critical = false
+var master_volume_db: float = -22.0
 var _agents: Dictionary = {}
 var _staff_nodes: Dictionary = {}
 var _carts: Dictionary = {}
 var _balls: Dictionary = {}
 var _visual_shots: Dictionary = {}
+var _motion: ActorMotion = ActorMotion.new()
+var _effects = EffectManagerClass.new()
+var _presentation_time: float = 0.0
+var _effect_root = Node3D.new()
 var _agent_root = Node3D.new()
 var _shot_root = Node3D.new()
 var _cursor_root = Node3D.new()
@@ -52,6 +60,7 @@ var _weather_particles: Node3D
 var _environment: Environment
 var _last_paint = Vector3.INF
 var _dragging_brush = false
+var _scenery_height_dirty = false
 var _notice_time = 0.0
 var _last_toast_log_id = 0
 var _sound: AudioStreamPlayer
@@ -79,9 +88,12 @@ func _ready() -> void:
 	_autoplay = "--autoplay" in OS.get_cmdline_user_args()
 	_benchmark = "--benchmark" in OS.get_cmdline_user_args()
 	graphics.settings_changed.connect(_on_graphics_settings_changed)
-	RenderingServer.set_default_clear_color(Color("b8cabe"))
 	_setup_light()
 	add_child(_agent_root)
+	_effect_root.name = "CosmeticEffects"
+	add_child(_effect_root)
+	_effects.attach(_effect_root)
+	_effects.configure(graphics.current)
 	add_child(_shot_root)
 	add_child(_cursor_root)
 	add_child(_selection_root)
@@ -89,7 +101,7 @@ func _ready() -> void:
 	camera=ResortCamera.new()
 	add_child(camera)
 	_sound=AudioStreamPlayer.new()
-	_sound.volume_db=-22
+	_sound.volume_db=master_volume_db
 	add_child(_sound)
 	_create_resort(false, "cedar_house", -1, true)
 	camera.focus=Vector3(310,0,305)
@@ -113,15 +125,8 @@ func _ready() -> void:
 func _setup_light() -> void:
 	var light=DirectionalLight3D.new()
 	light.rotation_degrees=Vector3(-38,-38,0)
-	light.light_color=Color("fff0d3")
-	light.light_energy=1.12
-	light.shadow_enabled=true
-	light.directional_shadow_max_distance=1100
-	light.directional_shadow_blend_splits=true
-	light.shadow_blur=1.6
-	light.shadow_bias=0.15
-	light.shadow_normal_bias=1.5
-	light.directional_shadow_mode=DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	GraphicsShadow.apply_directional_light(light, graphics.current)
+	GraphicsPalette.apply_directional_light(light, 1)
 	add_child(light)
 	_directional_light=light
 	var env=WorldEnvironment.new()
@@ -129,19 +134,14 @@ func _setup_light() -> void:
 	settings.background_mode=Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color=Color("789fb4")
-	sky_material.sky_horizon_color=Color("dce4cd")
-	sky_material.ground_horizon_color=Color("dce4cd")
-	sky_material.ground_bottom_color=Color("66734a")
-	sky_material.sun_angle_max=8.0
+	GraphicsPalette.apply_procedural_sky(sky_material, 1)
 	sky.sky_material=sky_material
 	settings.sky=sky
 	settings.reflected_light_source=Environment.REFLECTION_SOURCE_SKY
-	settings.background_color=Color("b8cabe")
 	settings.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR
-	settings.ambient_light_color=Color("c6d8cf")
-	settings.ambient_light_energy=0.48
-	settings.tonemap_mode=Environment.TONE_MAPPER_LINEAR
+	GraphicsPalette.apply_environment(settings, 1)
+	GraphicsShadow.apply_environment_ssao(settings, graphics.current)
+	GraphicsAtmosphere.apply_environment_atmosphere(settings, graphics.current, 1)
 	env.environment=settings
 	_environment=settings
 	_world_environment=env
@@ -151,8 +151,7 @@ func _setup_light() -> void:
 func _apply_graphics_lighting(settings: GraphicsSettings) -> void:
 	if not is_instance_valid(_directional_light):
 		return
-	_directional_light.directional_shadow_max_distance=settings.shadow_distance
-	RenderingServer.directional_shadow_atlas_set_size(settings.shadow_resolution, true)
+	GraphicsShadow.apply_directional_light(_directional_light, settings)
 
 func _apply_graphics_environment(settings: GraphicsSettings) -> void:
 	if not is_instance_valid(_environment):
@@ -162,12 +161,22 @@ func _apply_graphics_environment(settings: GraphicsSettings) -> void:
 			_environment.reflected_light_source=Environment.REFLECTION_SOURCE_SKY
 		_:
 			_environment.reflected_light_source=Environment.REFLECTION_SOURCE_SKY
+	GraphicsShadow.apply_environment_ssao(_environment, settings)
+	GraphicsAtmosphere.apply_environment_atmosphere(_environment, settings, _current_season_index())
+	GraphicsAtmosphere.invalidate_reflection_captures(self)
+	if is_instance_valid(world):
+		world.mark_reflections_dirty()
 	AssetFactory.foliage_lod_distance=clampf(settings.foliage_view_distance*0.08, 35.0, 120.0)
+	var use_gen2: bool = settings.preset != GraphicsSettings.Preset.LOW
+	if AssetFactory.gen2_trees_enabled != use_gen2:
+		AssetFactory.gen2_trees_enabled = use_gen2
+		AssetFactory.clear_tree_cache()
 
 func _apply_graphics_weather(settings: GraphicsSettings) -> void:
 	if not is_instance_valid(_weather_particles):
 		return
 	_weather_particles.amount=mini(_weather_particles.amount, settings.weather_particle_cap)
+	_effects.configure(settings)
 
 func _on_graphics_settings_changed(_previous: GraphicsSettings, current: GraphicsSettings) -> void:
 	graphics.apply_to_game(self, _needs_scenery_rebuild(current))
@@ -190,19 +199,21 @@ func consume_profile_metrics() -> Dictionary:
 func _apply_season() -> void:
 	if sim==null:return
 	var index:int=sim.season_index()
-	var palettes=[
-		{"bg":Color("b8cabe"),"amb":Color("d6dfca")},
-		{"bg":Color("c2d2b2"),"amb":Color("e0e2c4")},
-		{"bg":Color("c9bda1"),"amb":Color("ddd2b6")},
-		{"bg":Color("c9d3da"),"amb":Color("dfe6ec")},
-	]
-	var palette:Dictionary=palettes[clampi(index,0,3)]
 	if is_instance_valid(_environment):
-		_environment.background_color=palette.bg
-		_environment.ambient_light_color=palette.amb
-	if world!=null and is_instance_valid(world):world.set_season(index)
+		GraphicsPalette.apply_environment(_environment, index)
+		GraphicsAtmosphere.apply_environment_atmosphere(_environment, graphics.current, index)
+		GraphicsAtmosphere.invalidate_reflection_captures(self)
+	if is_instance_valid(world):
+		world.mark_reflections_dirty()
+	if is_instance_valid(_directional_light):
+		GraphicsPalette.apply_directional_light(_directional_light, index)
+	if world!=null and is_instance_valid(world):
+		world.set_season(index)
 	AssetFactory.apply_season(index)
 	_update_weather_particles(index)
+
+func _current_season_index() -> int:
+	return sim.season_index() if sim != null else 1
 
 func _update_weather_particles(index:int) -> void:
 	var particles:CPUParticles3D
@@ -302,6 +313,12 @@ func _recreate_world() -> void:
 	_carts.clear()
 	_balls.clear()
 	_visual_shots.clear()
+	_motion.reset()
+	_presentation_time = 0.0
+	_effects.reset()
+	_effects.configure(graphics.current)
+	if is_instance_valid(world):
+		_effects.register_ambient_from_world(world)
 
 func new_game(sandbox_mode: bool, map_id: String, seed_value: int, starter: bool) -> void:
 	save_current("Before new game")
@@ -325,6 +342,10 @@ func new_game(sandbox_mode: bool, map_id: String, seed_value: int, starter: bool
 func quit_to_desktop() -> void:
 	get_tree().quit()
 
+func set_master_volume_db(value: float) -> void:
+	master_volume_db=value
+	if is_instance_valid(_sound):_sound.volume_db=value
+
 func _process(dt: float) -> void:
 	if sim==null:return
 	_visual_time+=dt
@@ -332,7 +353,9 @@ func _process(dt: float) -> void:
 	camera.enabled=not menu_open and not focus_control is LineEdit and not focus_control is TextEdit
 	if not menu_open and speed>0:
 		var sim_started: int = Time.get_ticks_usec()
-		sim.tick(minf(dt,0.1)*60.0*speed)
+		# Bound simulation catch-up per rendered frame so low FPS/high speed does
+		# not monopolize the main thread. Direct simulation calls remain exact.
+		sim.tick(minf(minf(dt,0.1)*60.0*speed, 8.0))
 		_profile_sim_ms += float(Time.get_ticks_usec()-sim_started)/1000.0
 	if sim.game_over and not _game_over_handled:
 		_game_over_handled = true
@@ -344,13 +367,14 @@ func _process(dt: float) -> void:
 	_update_balls(dt)
 	_profile_sync_ms += float(Time.get_ticks_usec()-sync_started)/1000.0
 	if is_instance_valid(_weather_particles):_weather_particles.position=Vector3(camera.focus.x,42,camera.focus.z)
+	if is_instance_valid(world):world.set_stripe_overview_fade(camera.size)
 	_ui_timer+=dt
 	_cursor_timer+=dt
 	if _ui_timer>=0.5:
 		_ui_timer=0
 		ui.refresh()
 		_poll_log_toasts()
-		if sim.settlements!=_last_settlements:
+		if sim.settlements!=_last_settlements and not sim.game_over:
 			_last_settlements=sim.settlements
 			save_current("Autosave")
 		if sim.season_index()!=_last_season:
@@ -382,7 +406,11 @@ func _process(dt: float) -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and not event.pressed:
-		if event.button_index==MOUSE_BUTTON_LEFT:_dragging_brush=false
+		if event.button_index==MOUSE_BUTTON_LEFT:
+			_dragging_brush=false
+			if _scenery_height_dirty:
+				_scenery_height_dirty=false
+				world.call_deferred("sync_objects")
 		if event.button_index in [MOUSE_BUTTON_MIDDLE,MOUSE_BUTTON_RIGHT]:camera.drag_mode=0
 
 
@@ -426,9 +454,8 @@ func set_speed(value: int) -> void:
 	notify("Simulation paused" if value==0 else "Simulation speed %d×"%value)
 
 func toggle_open() -> void:
-	if sim.open:sim.open=false
-	elif not sim.reopen():return
-	notify("Resort open to arrivals" if sim.open else "Closed to new arrivals. Current guests will finish.")
+	sim.arrivals_enabled = not sim.arrivals_enabled
+	notify("Arrivals enabled" if sim.arrivals_enabled else "New arrivals paused. Current guests will finish.")
 
 func set_tool(value: String) -> void:
 	tool=value
@@ -510,7 +537,9 @@ func _ring(p: Vector3, radius: float, color: Color, width: float = 0.6) -> MeshI
 		q.y=terrain.height_at(q)+0.35
 		if terrain.surface_at(q)==5:q.y=maxf(q.y,terrain.water_levels[clampi(int(q.z/4),0,255)*256+clampi(int(q.x/4),0,255)]+0.2)
 		points.append(q)
-	return TerrainView.line_mesh(points,color,width)
+	var mesh: MeshInstance3D = TerrainView.line_mesh(points,color,width)
+	ReflectionProbesClass.tag_helper(mesh)
+	return mesh
 
 func _sample_line(a: Vector3, b: Vector3) -> PackedVector3Array:
 	var result=PackedVector3Array()
@@ -637,6 +666,7 @@ func _commit(command: Dictionary, add_history: bool = true, reverse: bool = fals
 		sim.post("warning","construction","Insufficient funds or unpaid bills. Check the finance panel.",Vector3.INF,sim._tab_target("Money"))
 		return false
 	if amount<0:sim.credit(-amount,"construction","Construction reversal / salvage")
+	var revision_before: int = terrain.revision
 	_apply(command,reverse)
 	var removed=-1
 	if command.kind=="hole" and (command.before if reverse else command.after).is_empty():removed=(command.after if reverse else command.before).id
@@ -652,11 +682,21 @@ func _commit(command: Dictionary, add_history: bool = true, reverse: bool = fals
 				var pin_pos: Vector3 = Vector3((pins_value as Array)[pin_index])
 				pin_pos.y = terrain.height_at(pin_pos)
 				(pins_value as Array)[pin_index] = pin_pos
-	terrain.touch()
+	if terrain.revision == revision_before:
+		terrain.touch()
 	sim.on_construction(command.get("center",Vector3.ZERO) if command.get("radius",0)>0 else Vector3(-10000,0,-10000),command.get("radius",0),removed)
 	world.rebuild_dirty()
-	world.sync_objects()
+	if command.kind != "brush":
+		world.sync_objects()
+	elif command.kind == "brush" and not (command.patch.get("nodes", []) as Array).is_empty():
+		_scenery_height_dirty=true
+	elif command.kind == "contour" and not (command.get("nodes", []) as Array).is_empty():
+		_scenery_height_dirty=true
 	world.sync_holes()
+	_effects.register_ambient_from_world(world)
+	world.refresh_mowing_patterns(true)
+	if command.kind == "contour":
+		world.refresh_contour_maps(true)
 	if add_history:
 		undo_stack.append(command.duplicate(true))
 		if undo_stack.size()>100:undo_stack.pop_front()
@@ -668,6 +708,7 @@ func _commit(command: Dictionary, add_history: bool = true, reverse: bool = fals
 func _apply(command: Dictionary, reverse: bool) -> void:
 	match command.kind:
 		"brush":terrain.apply_brush(command.patch,reverse)
+		"contour":terrain.apply_contour_command(command,reverse)
 		"object","hole":
 			var from: Dictionary=command.after if reverse else command.before
 			var to: Dictionary=command.before if reverse else command.after
@@ -983,7 +1024,9 @@ func _draw_selection() -> void:
 	if not selected_hole.is_empty():
 		var outline=terrain.green_outline_points(selected_hole)
 		if outline.size()>=4:
-			_selection_root.add_child(TerrainView.line_mesh(outline,Color("fff0bf"),0.45))
+			var outline_mesh: MeshInstance3D = TerrainView.line_mesh(outline,Color("fff0bf"),0.45)
+			ReflectionProbesClass.tag_helper(outline_mesh)
+			_selection_root.add_child(outline_mesh)
 		else:
 			_selection_root.add_child(_ring(selected_hole.cup,selected_hole.green_radius,Color("fff0bf"),0.4))
 		var cup_pos=TerrainModel.effective_cup(selected_hole)
@@ -1104,7 +1147,7 @@ func _refresh_overlay_visuals(_force: bool = false) -> void:
 		world.refresh_overlay(sim)
 	elif overlay_id == "wear":
 		world.analytics_source = sim.analytics
-		world.rebuild_all_chunks()
+		world.refresh_chunk_overlay_budget(16)
 	else:
 		world._clear_overlay_mesh()
 	if overlay_id == "coverage":
@@ -1185,13 +1228,13 @@ func overlay_legend() -> Dictionary:
 	match overlay_id:
 		"traffic":
 			max_label = "%.0f" % sim.analytics.max_value("traffic")
-			colors = PackedColorArray([Color(1, 0.55, 0.18, 0), Color(1, 0.45, 0.08, 0.85)])
+			colors = PackedColorArray(GraphicsPalette.READABILITY.overlay_traffic)
 		"cart_traffic":
 			max_label = "%.0f" % sim.analytics.max_value("cart_traffic")
-			colors = PackedColorArray([Color(0.35, 0.65, 1, 0), Color(0.15, 0.45, 0.95, 0.85)])
+			colors = PackedColorArray(GraphicsPalette.READABILITY.overlay_cart_traffic)
 		"waiting":
 			max_label = "%.0f" % sim.analytics.max_value("waiting")
-			colors = PackedColorArray([Color(1, 0.92, 0.35, 0), Color(0.92, 0.18, 0.12, 0.85)])
+			colors = PackedColorArray(GraphicsPalette.READABILITY.overlay_waiting)
 		"landings":
 			max_label = "%d fair" % int(sim.analytics.max_value("landings"))
 			min_label = "%d hazard" % int(sim.analytics.max_value("hazard_landings"))
@@ -1230,36 +1273,52 @@ func landing_caption() -> String:
 	return "Fair landings %d · Hazard landings %d" % [int(round(fair_total)), int(round(hazard_total))]
 
 func _update_people(dt: float) -> void:
+	var presentation_dt: float = _motion.presentation_dt(dt, speed, menu_open, _photo_mode)
 	var alive={}
 	for guest in sim.guests:
 		alive[guest.id]=true
 		if not _agents.has(guest.id):
 			var node=AssetFactory.golfer(guest.id)
 			node.position=guest.pos
+			ReflectionProbesClass.tag_dynamic(node)
 			_agent_root.add_child(node)
 			_agents[guest.id]=node
 		var avatar=_agents[guest.id]
-		var previous=avatar.position
 		var target_position:Vector3=guest.pos
+		var group_offset: Vector3 = Vector3.ZERO
 		if str(guest.activity) not in ["swinging","putting","walking_to_ball","riding"]:
-			target_position+=Vector3((guest.id%2-0.5)*1.4,0,((guest.id/2)%2-0.5)*1.3)
-		if str(guest.activity)=="riding":target_position+=Vector3((guest.id%2-0.5)*0.65,0.3,((guest.id/2)%2-0.5)*0.7)
-		avatar.position=avatar.position.lerp(target_position,minf(1,dt*10))
-		var delta=target_position-previous
-		if Vector2(delta.x,delta.z).length()>0.2:avatar.rotation.y=atan2(delta.x,delta.z)+PI
+			group_offset=Vector3((guest.id%2-0.5)*1.4,0,((guest.id/2)%2-0.5)*1.3)
+		if str(guest.activity)=="riding":
+			group_offset=Vector3((guest.id%2-0.5)*0.65,0.3,((guest.id/2)%2-0.5)*0.7)
 		var activity=str(guest.activity)
-		if not guest.get("shot",{}).is_empty():activity="putting" if guest.shot.get("club","")=="putter" else "swinging"
-		elif activity=="riding":activity="seated"
-		elif delta.length()>0.4:activity="walking"
-		var animation_phase=_visual_time*1.8
-		if _visual_shots.has(guest.id) and _visual_shots[guest.id].time<0.7:
-			activity="putting" if _visual_shots[guest.id].shot.get("club","")=="putter" else "swinging"
-			animation_phase=clampf(_visual_shots[guest.id].time/0.7,0,1)
-		AssetFactory.animate_golfer(avatar,activity,animation_phase)
+		if not guest.get("shot",{}).is_empty():
+			activity="putting" if guest.shot.get("club","")=="putter" else "swinging"
+		elif activity=="riding":
+			activity="seated"
+		elif avatar.position.distance_to(target_position + group_offset) > 0.4:
+			activity="walking"
+		var shot_payload: Dictionary = guest.get("last_shot", guest.get("shot", {}))
+		_motion.update_golfer(
+			guest.id,
+			avatar,
+			guest.pos,
+			activity,
+			shot_payload,
+			_visual_time,
+			terrain,
+			camera.focus,
+			graphics.current,
+			presentation_dt,
+			dt,
+			group_offset,
+		)
 		var serial=guest.get("shot_serial",0)
 		if serial>0 and avatar.get_meta("shot_serial",0)!=serial:
 			avatar.set_meta("shot_serial",serial)
-			_visual_shots[guest.id]={"shot":guest.get("last_shot",guest.get("shot",{})).duplicate(true),"time":0.0}
+			var shot_copy: Dictionary = shot_payload.duplicate(true)
+			shot_copy["serial"] = serial
+			_motion.register_shot(guest.id, shot_copy)
+			_visual_shots[guest.id] = _motion.visual_shots[guest.id]
 			if not _balls.has(guest.id):
 				var ball=MeshInstance3D.new()
 				var sphere=SphereMesh.new()
@@ -1267,22 +1326,30 @@ func _update_people(dt: float) -> void:
 				sphere.height=0.56
 				ball.mesh=sphere
 				var mat=StandardMaterial3D.new()
-				mat.albedo_color=Color("fffbef")
+				mat.albedo_color=GraphicsPalette.READABILITY.ball
 				ball.material_override=mat
+				ReflectionProbesClass.tag_dynamic(ball)
 				_agent_root.add_child(ball)
 				_balls[guest.id]=ball
 		if guest.get("cart",false):
 			if not _carts.has(guest.group_id):
 				var cart=AssetFactory.cart()
+				ReflectionProbesClass.tag_dynamic(cart)
 				_agent_root.add_child(cart)
 				_carts[guest.group_id]=cart
 			var cart_node=_carts[guest.group_id]
 			var pos=guest.get("cart_pos",guest.pos)
-			if cart_node.position==Vector3.ZERO:cart_node.position=pos
-			var old=cart_node.position
-			cart_node.position=old.lerp(pos,minf(1,dt*8))
-			var difference=pos-old
-			if difference.length()>0.2:cart_node.rotation.y=atan2(difference.x,difference.z)
+			if cart_node.position==Vector3.ZERO:
+				cart_node.position=pos
+			_motion.update_cart(
+				guest.group_id,
+				cart_node,
+				pos,
+				terrain,
+				camera.focus,
+				graphics.current,
+				dt,
+			)
 		if guest.id==selected_guest_id:
 			if follow_selected:camera.focus=avatar.position
 			if not avatar.has_node("Selection"):
@@ -1296,45 +1363,58 @@ func _update_people(dt: float) -> void:
 			_agents.erase(id)
 			if _balls.has(id):_balls[id].queue_free();_balls.erase(id)
 			_visual_shots.erase(id)
+			_motion.erase_actor(id)
 	var staff_alive={}
 	for worker in sim.staff:
 		staff_alive[worker.id]=true
 		if not _staff_nodes.has(worker.id):
 			var node=AssetFactory.staff_golfer(str(worker.get("role", "")), worker.id)
 			node.position=worker.pos
+			ReflectionProbesClass.tag_dynamic(node)
 			_agent_root.add_child(node)
 			_staff_nodes[worker.id]=node
 		var node=_staff_nodes[worker.id]
-		var delta=worker.pos-node.position
-		node.position=node.position.lerp(worker.pos,minf(1,dt*10))
-		if delta.length()>0.2:node.rotation.y=atan2(delta.x,delta.z)+PI
-		var staff_activity: String = "mowing" if str(worker.get("activity", "")) == "maintaining" else ("walking" if delta.length()>0.5 else "idle")
-		AssetFactory.animate_golfer(node, staff_activity, _visual_time * 4)
+		var staff_activity: String = "mowing" if str(worker.get("activity", "")) == "maintaining" else ("walking" if worker.pos.distance_to(node.position) > 0.5 else "idle")
+		_motion.update_staff(
+			worker.id,
+			node,
+			worker.pos,
+			staff_activity,
+			terrain,
+			camera.focus,
+			graphics.current,
+			_visual_time,
+			dt,
+		)
 	for id in _staff_nodes.keys():
-		if not staff_alive.has(id):_staff_nodes[id].queue_free();_staff_nodes.erase(id)
+		if not staff_alive.has(id):
+			_staff_nodes[id].queue_free()
+			_staff_nodes.erase(id)
+			_motion.erase_actor(id)
 	var cart_groups={}
 	for guest in sim.guests:
 		if guest.get("cart",false):cart_groups[guest.group_id]=true
 	for id in _carts.keys():
-		if not cart_groups.has(id):_carts[id].queue_free();_carts.erase(id)
+		if not cart_groups.has(id):
+			_carts[id].queue_free()
+			_carts.erase(id)
+			_motion.erase_cart(id)
 
 func _update_balls(dt: float) -> void:
-	for id in _visual_shots:
-		var data=_visual_shots[id]
-		data.time+=dt*speed if not menu_open else 0
-		var shot=data.shot
-		if shot.is_empty() or not _balls.has(id):continue
-		var t=clampf(data.time/maxf(0.8,float(shot.get("physics_duration",1.6))),0,1)
-		var p: Vector3
-		if t<0.8:
-			var f=t/0.8
-			p=shot.start.lerp(shot.landing,f)
-			p.y+=sin(f*PI)*shot.arc+0.25
-		else:
-			p=shot.landing.lerp(shot.end,(t-0.8)/0.2)
-			p.y+=0.2+absf(sin((t-0.8)*PI*15))*0.3*(1-t)
-		_balls[id].position=p
-		_balls[id].visible=not shot.holed or t<1
+	var presentation_dt: float = _motion.presentation_dt(dt, speed, menu_open, _photo_mode)
+	_presentation_time += presentation_dt
+	_motion.advance_visual_shots(presentation_dt)
+	_visual_shots = _motion.visual_shots
+	if is_instance_valid(world):
+		_effects.poll_shot_effects(_motion, terrain, world, camera.focus, graphics.current)
+	var presentation_now: float = _presentation_time
+	for id in _motion.visual_shots:
+		if not _balls.has(id):
+			continue
+		_balls[id].position = _motion.ball_position(id)
+		_balls[id].visible = _motion.ball_visible(id)
+		presentation_now = maxf(presentation_now, float(_motion.visual_shots[id].get("time", 0.0)))
+	_effects.update(presentation_now, _visual_time, camera.focus, graphics.current)
 
 func save_current(name_override: String = "") -> void:
 	if sim==null:return
