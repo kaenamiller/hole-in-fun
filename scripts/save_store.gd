@@ -1,6 +1,6 @@
 class_name SaveStore
 extends RefCounted
-const VERSION = 1
+const VERSION = 2
 const DIRECTORY = "user://saves"
 static var directory = DIRECTORY
 
@@ -36,7 +36,9 @@ static func load_game(name_value: String) -> Dictionary:
 		file.seek(0)
 		var value=file.get_var(false)
 		file.close()
-		if not value is Dictionary or value.get("version",-1)!=VERSION:continue
+		if not value is Dictionary:continue
+		var save_version: int = int(value.get("version", -1))
+		if save_version < 1 or save_version > VERSION:continue
 		if not value.has("terrain") or not value.has("simulation"):continue
 		var data=value.terrain
 		if not data.get("heights",[]).size()==257*257 or not data.get("surfaces",[]).size()==256*256:continue

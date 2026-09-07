@@ -21,5 +21,6 @@ Dependencies flow downward. Items on the same line are independent.
 7. [Pricing depth](08-pricing-depth.md), [Marketing and reputation](06-marketing-reputation.md), [Memberships and returning guests](05-memberships-returning-guests.md) — the demand model rewrite; do pricing first because reputation and memberships both read the new demand pipeline.
 8. [Green shapes and hazards](11-green-shapes-hazards.md), [Hole design metrics](12-hole-design-metrics.md) — course-design layer; metrics read the new hazard data.
 9. [Multiple maps](14-multiple-maps.md) — last, because it needs the final `TerrainModel` field set to define presets against.
+10. [Calendar, seasons, and monthly settlement](15-calendar-seasons.md) — implemented; records the continuous-play day model the plans above were re-based onto, plus open balance items.
 
-Deferred items (goals and scenarios, guided onboarding, weather and seasons, spline paths, settings menu, camera modes, blueprints, music) are tracked in the top-level `README.md` under "Planned features".
+Deferred items (goals and scenarios, guided onboarding, spline paths, settings menu, camera modes, blueprints, music) are tracked in the top-level `README.md` under "Planned features". Weather and seasons are covered by plan 15.

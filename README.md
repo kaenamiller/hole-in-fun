@@ -20,15 +20,15 @@ These are development builds. The Mac app uses ad-hoc signing without Apple nota
 
 - A 1,024 m square, 4 m grid heightfield with individual height nodes, raise/lower/smooth/flatten brushes, seven surface types, water, cost previews, and reversible construction.
 - Up to 18 named/reorderable holes with tees, cups, adjustable circular green boundaries, par, routing waypoints, availability checks, and open/closed states.
-- A shared seeded shot engine for live golf and a 90-round design lab: beginner, intermediate, and expert profiles with clubs, layups, dispersion, elevation, lies, trees, water recovery, flight, roll, and putting.
+- A shared seeded shot engine for live golf and a 90-round design lab: beginner, intermediate, and expert profiles choose aims from expected remaining strokes (hazards, layups, carries), then resolve clubs, dispersion, elevation, lies, trees, water recovery, flight, roll, and putting.
 - Two path types and two functional bridge types. Weighted walking routes favor paths. Carts follow a separate connected network; guests walk to their parked cart and from it to tees, facilities, and balls.
 - Six facilities and 12 scenery items across three collections. Beauty radiates to nearby land and gains capped bonuses from distinct pieces in a collection. Repeated scenery is rendered with spatially grouped MultiMeshes.
 - Individually inspectable golfers, groups of 1–4, arrival/check-in/need/round/departure states, turn-taking, tee and facility queues, scorecards, cart travel, and walking/swinging/putting/seated animations.
 - Hireable and assignable groundskeepers, service attendants, and cleaners, with wages, physical travel, maintenance, cleanliness, and service effects.
-- Prices, demand, cash, detailed transactions, daily reports, three loan products, repayment, insolvency and one-time recovery funding.
-- A calendar with six event types, physical prerequisites, attendance and completed-round results, publicity, and three course grades with quality and qualifying-event requirements.
+- Prices, demand, cash, detailed transactions, monthly reports and settlement, three loan products, repayment, insolvency and one-time recovery funding.
+- A continuous calendar with seasons and weather visuals, six event types with physical prerequisites, attendance and completed-round results, publicity, and three course grades assessed quarterly.
 - Live edits relocate affected visitors, reset interrupted shots without adding strokes, recalculate routes, and record compensation. Impossible rounds end with refunds. Construction undo preserves ongoing simulation and transactions.
-- Named local saves, daily autosave, a save before replacing the current game, atomic replacement, a backup, and restoration of active visits and RNG state.
+- Named local saves, monthly autosave, a save before replacing the current game, atomic replacement, a backup, and restoration of active visits and RNG state.
 
 ## Controls
 
@@ -46,6 +46,8 @@ These are development builds. The Mac app uses ad-hoc signing without Apple nota
 | Pause / resume | Space or the top time controls |
 | Undo / redo | Command/Ctrl+Z; Command/Ctrl+Shift+Z |
 | Quick save | F5 |
+| Photo mode | F9 (Escape exits) |
+| Save screenshot | F12 |
 
 Paths and bridges take two clicks. New holes take a tee click followed by a cup click and include painted tee and green surfaces. Use the **Holes** panel to select a hole, edit it, or run the shot lab. **Build** lists facilities, paths and scenery; click existing objects to relocate, rotate or demolish them. **Guests** exposes individual needs and thoughts. **Saves** contains camera reset, sound toggle and saved games.
 
@@ -76,11 +78,11 @@ Images and build/test logs are written to the ignored `builds/` directory. See `
 
 `TerrainModel` owns height/surface arrays, holes, objects, beauty queries and weighted navigation. `TerrainView` renders chunk meshes, paths, bridges and scenery instances. `ResortSimulation` owns a fixed one-second simulation clock, people, queues, business and events. `ShotEngine` is shared by live and preview golf. `main.gd` coordinates reversible construction and scene presentation; `ResortUI` builds native Godot controls. `SaveStore` persists terrain and active simulation state.
 
-`Catalog` exposes stable dictionary IDs plus typed `ContentDefinition` resources. `AssetFactory` produces cached low-poly meshes and animated scene hierarchies. Replace its builders with imported scenes later while preserving stable catalog IDs. No runtime code generation or external model service is needed.
+`Catalog` exposes stable dictionary IDs plus typed `ContentDefinition` resources. `AssetFactory` produces cached, batched resort meshes with foliage LODs and animated scene hierarchies. Replace its builders with imported scenes later while preserving stable catalog IDs. No runtime code generation or external model service is needed.
 
 ## MVP boundaries
 
-This is an initial, playable management prototype, not a finished commercial game. Content is intentionally compact and procedural. Terrain is a heightfield with cell-painted edges; greens have circular editable boundaries. Ball flight and strategy use a deliberately simplified model rather than a complete golf rules/aerodynamics engine. Facility use is simulated without detailed interiors, course maintenance is an aggregate condition value, and the 600-minute operating day sends unfinished groups home with refunds. A congested course can finish far fewer rounds than its visitor count.
+This is an initial, playable management prototype, not a finished commercial game. Content is intentionally compact and procedural. Terrain is a heightfield with cell-painted edges; greens have circular editable boundaries. Ball flight and strategy use a deliberately simplified model rather than a complete golf rules/aerodynamics engine. Facility use is simulated without detailed interiors, course maintenance is an aggregate condition value, and play is continuous: days roll over as accounting ticks (monthly settlement, seasonal course grading) rather than closing gates, so a congested course can hold golfers waiting for weeks.
 
 No multiplayer, detailed weather/seasons, long-term memberships, underground terrain, organic spline bridges, licensed music, or store publishing is included. Balance, accessibility, controller support, and additional art/content remain future production work.
 
@@ -107,7 +109,6 @@ Deferred, not yet planned in detail:
 
 - Goals and scenarios with win conditions
 - Guided in-game onboarding for the blank property
-- Weather and seasons
 - Spline paths and organic bridges
 - A settings menu (audio, resolution, keybinds, accessibility, UI scale)
 - Additional camera modes (walk the course, photo mode)
@@ -115,3 +116,7 @@ Deferred, not yet planned in detail:
 - Music and ambient audio
 
 Trees and vegetation as a growth system were considered and rejected.
+
+## Lush resort visual pass
+
+New Cedar House games feature three holes around a lake, woodland and a connected cart loop. Saved resorts receive the updated terrain, water, foliage and architectural rendering while keeping their layouts. F9 enables photo mode; F12 saves a PNG in the game's user-data screenshots folder. See [the implementation notes](design/lush-resort/README.md) for scope, captures and validation.

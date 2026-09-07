@@ -5,6 +5,6 @@ engine="${GODOT_BIN:-$PWD/.tools/Godot.app/Contents/MacOS/Godot}"
 if [[ ! -x "$engine" ]]; then engine="$(command -v godot || command -v godot4 || true)"; fi
 if [[ -z "$engine" || ! -x "$engine" ]]; then echo 'Set GODOT_BIN to the Godot 4.7.2 executable.' >&2; exit 1; fi
 "$engine" --headless --editor --path . --quit
-for suite in assets shots terrain simulation regressions game; do
+for suite in assets lush lush_round shots terrain simulation regressions game graphics; do
   "$engine" --headless --path . --script "tests/test_${suite}.gd"
 done

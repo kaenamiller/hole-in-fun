@@ -3,6 +3,9 @@ extends SceneTree
 const TerrainModelClass = preload("res://scripts/terrain_model.gd")
 const TerrainViewClass = preload("res://scripts/terrain_view.gd")
 const ShotEngineClass = preload("res://scripts/shot_engine.gd")
+const AnalyticsGridClass = preload("res://scripts/analytics_grid.gd")
+const MapGeneratorClass = preload("res://scripts/map_generator.gd")
+const CatalogClass = preload("res://scripts/catalog.gd")
 
 func _init() -> void:
 	var failures: int = 0
@@ -12,7 +15,17 @@ func _init() -> void:
 	failures += _test_hole_validity()
 	failures += _test_snapshot_restore()
 	failures += _test_view_mesh_and_sync()
+	failures += _test_overlay_mesh()
 	failures += _test_shot_profile_shape()
+	failures += _test_condition_snapshot()
+	failures += _test_hole_condition_fresh()
+	failures += _test_paint_resets_condition()
+	failures += _test_green_flood_fill()
+	failures += _test_touching_greens_rejected()
+	failures += _test_zone_at_ob_and_penalty()
+	failures += _test_bunker_depth()
+	failures += _test_map_generation()
+	failures += _test_map_snapshot_fields()
 	if failures == 0:
 		print("test_terrain: all tests passed")
 	else:
@@ -71,6 +84,8 @@ func _test_hole_validity() -> int:
 	var cup: Vector3 = Vector3(400.0, 0.0, 300.0)
 	var hole: Dictionary = terrain.add_hole(tee, cup, 4)
 	var initially_invalid: bool = terrain.hole_valid(hole) != ""
+	for index in range(20):
+		terrain.paint_disk(tee.lerp(cup, float(index) / 19.0), 18.0, 1)
 	terrain.paint_disk(tee, 9.0, 3)
 	terrain.paint_disk(cup, 17.0, 2)
 	var valid_after_paint: bool = terrain.hole_valid(hole) == ""
@@ -116,6 +131,40 @@ func _test_view_mesh_and_sync() -> int:
 	line.free()
 	return _expect(mesh_ok, "terrain view did not build the expected chunks or line mesh")
 
+func _test_overlay_mesh() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var view: TerrainView = TerrainViewClass.new()
+	view.setup(terrain)
+	var chunk_ids_before: Array[int] = []
+	for key in view.chunks.keys():
+		chunk_ids_before.append(view.chunks[key].get_instance_id())
+	var grid: AnalyticsGrid = AnalyticsGridClass.new()
+	grid.add("traffic", Vector3(512, 0, 512), 12.0)
+	grid.add("traffic", Vector3(520, 0, 512), 6.0)
+	var fake_sim = _FakeAnalyticsSim.new(grid)
+	view.set_overlay("traffic")
+	view.refresh_overlay(fake_sim)
+	var mesh: Mesh = view.overlay_mesh.mesh
+	var vertex_count: int = 0
+	if mesh != null and mesh.get_surface_count() > 0:
+		var arrays: Array = mesh.surface_get_arrays(0)
+		vertex_count = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var chunk_ids_after: Array[int] = []
+	for key in view.chunks.keys():
+		chunk_ids_after.append(view.chunks[key].get_instance_id())
+	var ids_unchanged: bool = chunk_ids_before.size() == chunk_ids_after.size()
+	for index in range(chunk_ids_before.size()):
+		ids_unchanged = ids_unchanged and chunk_ids_before[index] == chunk_ids_after[index]
+	var mesh_ok: bool = mesh != null and vertex_count == 4096 * 6
+	view.free()
+	return _expect(mesh_ok and ids_unchanged, "traffic overlay mesh or chunk rebuild contract failed")
+
+class _FakeAnalyticsSim:
+	extends RefCounted
+	var analytics: AnalyticsGrid
+	func _init(grid: AnalyticsGrid) -> void:
+		analytics = grid
+
 func _test_shot_profile_shape() -> int:
 	var terrain: TerrainModel = TerrainModelClass.new()
 	var tee: Vector3 = Vector3(40.0, 0.0, 40.0)
@@ -150,6 +199,139 @@ func _test_shot_profile_shape() -> int:
 			starter_caps += 1
 	print("starter hole averages: %s" % [starter_profiles.map(func(item: Dictionary): return item.get("average", 0.0))])
 	return _expect(metrics_ok and ordering_ok and starter_caps == 0, "shot profile averages did not separate beginners from experts or hit the 14-stroke cap excessively")
+
+func _test_condition_snapshot() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	terrain.apply_wear_at(Vector3(512.0, 0.0, 512.0), 0.2)
+	terrain.paint_disk(Vector3(512.0, 0.0, 512.0), 12.0, 1)
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var round_trip: bool = copy.condition == saved.condition
+	return _expect(round_trip and saved.has("condition"), "condition array did not round-trip through snapshot")
+
+func _test_hole_condition_fresh() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var tee: Vector3 = Vector3(300.0, 0.0, 300.0)
+	var cup: Vector3 = Vector3(400.0, 0.0, 300.0)
+	terrain.paint_disk(tee, 9.0, 3)
+	terrain.paint_disk(cup, 17.0, 2)
+	for index in range(20):
+		terrain.paint_disk(tee.lerp(cup, float(index) / 19.0), 18.0, 1)
+	var hole: Dictionary = terrain.add_hole(tee, cup, 4)
+	var stats: Dictionary = terrain.hole_condition(hole)
+	var fresh: bool = is_equal_approx(float(stats.get("green", 0.0)), 1.0) and is_equal_approx(float(stats.get("fairway", 0.0)), 1.0)
+	fresh = fresh and is_equal_approx(float(stats.get("tee", 0.0)), 1.0) and is_equal_approx(float(stats.get("bunkers", 0.0)), 1.0)
+	return _expect(fresh, "hole_condition on a fresh hole should be all 1.0")
+
+func _test_paint_resets_condition() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	terrain.paint_disk(Vector3(240.0, 0.0, 240.0), 12.0, 1)
+	terrain.apply_wear_at(Vector3(240.0, 0.0, 240.0), 0.5)
+	var worn: float = terrain.condition_at(Vector3(240.0, 0.0, 240.0))
+	terrain.paint_disk(Vector3(240.0, 0.0, 240.0), 12.0, 2)
+	var reset: float = terrain.condition_at(Vector3(240.0, 0.0, 240.0))
+	return _expect(worn < 0.6 and is_equal_approx(reset, 1.0), "painting a disc should reset cell condition to 1.0")
+
+func _test_green_flood_fill() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var cup: Vector3 = Vector3(400.0, 0.0, 400.0)
+	terrain.paint_disk(cup, 14.0, 2)
+	terrain.paint_disk(cup + Vector3(34.0, 0.0, 0.0), 8.0, 2)
+	terrain.paint_disk(cup + Vector3(0.0, 0.0, 40.0), 6.0, 2)
+	var hole: Dictionary = terrain.add_hole(Vector3(300.0, 0.0, 400.0), cup, 4)
+	var cells: PackedInt32Array = terrain.green_cells(hole)
+	var isolated: Vector3 = cup + Vector3(34.0, 0.0, 0.0)
+	var connected: bool = terrain.on_green(cup, hole)
+	var ignored: bool = not terrain.on_green(isolated, hole)
+	var fill_only_connected: bool = cells.size() > 0 and cells.size() < 200
+	return _expect(connected and ignored and fill_only_connected, "green flood fill should ignore disconnected paint")
+
+func _test_touching_greens_rejected() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var cup_a: Vector3 = Vector3(300.0, 0.0, 300.0)
+	var cup_b: Vector3 = Vector3(312.0, 0.0, 300.0)
+	terrain.paint_disk(cup_a, 18.0, 2)
+	terrain.paint_disk(cup_b, 18.0, 2)
+	terrain.paint_disk(Vector3(300.0, 0.0, 280.0), 9.0, 3)
+	terrain.paint_disk(Vector3(312.0, 0.0, 280.0), 9.0, 3)
+	for index in range(12):
+		terrain.paint_disk(Vector3(300.0, 0.0, 280.0).lerp(cup_a, float(index) / 11.0), 14.0, 1)
+		terrain.paint_disk(Vector3(312.0, 0.0, 280.0).lerp(cup_b, float(index) / 11.0), 14.0, 1)
+	var hole_a: Dictionary = terrain.add_hole(Vector3(300.0, 0.0, 280.0), cup_a, 4)
+	var hole_b: Dictionary = terrain.add_hole(Vector3(312.0, 0.0, 280.0), cup_b, 4)
+	var reason: String = terrain.hole_valid(hole_a)
+	return _expect(not reason.is_empty(), "greens that touch another cup should fail validation")
+
+func _test_zone_at_ob_and_penalty() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var tee: Vector3 = Vector3(100.0, 0.0, 500.0)
+	var cup: Vector3 = Vector3(500.0, 0.0, 500.0)
+	for index in range(20):
+		terrain.paint_disk(tee.lerp(cup, float(index) / 19.0), 16.0, 1)
+	terrain.paint_disk(tee, 9.0, 3)
+	terrain.paint_disk(cup, 16.0, 2)
+	var hole: Dictionary = terrain.add_hole(tee, cup, 4)
+	var boundary: Vector3 = Vector3(290.0, 0.0, 490.0)
+	var far: Vector3 = Vector3(310.0, 0.0, 485.0)
+	terrain.add_object("ob_stakes", boundary, 0.0, boundary + Vector3(40.0, 0.0, 0.0))
+	var ob_side: String = terrain.zone_at(far, hole)
+	var safe_side: String = terrain.zone_at(Vector3(310.0, 0.0, 520.0), hole)
+	var loop_a: Vector3 = Vector3(620.0, 0.0, 470.0)
+	var loop_b: Vector3 = Vector3(660.0, 0.0, 470.0)
+	var loop_c: Vector3 = Vector3(640.0, 0.0, 510.0)
+	terrain.add_object("penalty_stakes", loop_a, 0.0, loop_b)
+	terrain.add_object("penalty_stakes", loop_b, 0.0, loop_c)
+	terrain.add_object("penalty_stakes", loop_c, 0.0, loop_a)
+	var inside_penalty: String = terrain.zone_at(Vector3(640.0, 0.0, 488.0), hole)
+	return _expect(ob_side == "ob" and safe_side == "" and inside_penalty == "penalty", "zone_at should classify OB and penalty areas")
+
+func _test_bunker_depth() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	var center: Vector3 = Vector3(512.0, 0.0, 512.0)
+	terrain.paint_disk(center, 10.0, 4)
+	var shallow: Dictionary = terrain.bunker_at(center)
+	terrain.apply_brush(terrain.plan_bunker_shape(center, 8.0, 0.8))
+	var deep: Dictionary = terrain.bunker_at(center)
+	var depth_ok: bool = float(deep.get("depth", 0.0)) > float(shallow.get("depth", 0.0)) + 0.10
+	return _expect(depth_ok, "bunker shaping should increase computed bunker depth")
+
+func _test_map_generation() -> int:
+	var failures: int = 0
+	for map_def in CatalogClass.maps():
+		var map_id: String = str(map_def.get("id", ""))
+		var seed_value: int = int(map_def.get("seed", 1))
+		var first: TerrainModel = MapGeneratorClass.generate(map_def)
+		var second: TerrainModel = MapGeneratorClass.generate(map_def)
+		var hash_ok: bool = MapGeneratorClass.heights_hash(first) == MapGeneratorClass.heights_hash(second)
+		failures += _expect(hash_ok, "%s should generate deterministically for its seed" % map_id)
+		var reach_ok: bool = MapGeneratorClass.reachability_ratio(first) >= 0.70
+		failures += _expect(reach_ok, "%s should be reachable from the entrance" % map_id)
+		failures += _expect(first.palette.size() == 7, "%s palette should have 7 entries" % map_id)
+		if map_id == "stonebrook_hills":
+			var crossings: int = MapGeneratorClass.river_crossing_count(first)
+			failures += _expect(crossings >= 2, "stonebrook_hills river should have at least two bridgeable crossings")
+	return failures
+
+func _test_map_snapshot_fields() -> int:
+	var terrain: TerrainModel = TerrainModelClass.new()
+	terrain.entrance = Vector3(120.0, 0.0, 88.0)
+	terrain.map_id = "stonebrook_hills"
+	terrain.rough_name = "Rough"
+	terrain.cost_multipliers = {"raise": 1.35, "fairway": 1.0, "water": 1.0, "clear_tree": 1.0}
+	terrain.palette = PackedColorArray([Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA, Color.CYAN, Color.ORANGE])
+	var saved: Dictionary = terrain.snapshot()
+	var copy: TerrainModel = TerrainModelClass.new()
+	copy.restore(saved)
+	var round_trip: bool = copy.entrance == terrain.entrance and copy.map_id == terrain.map_id
+	round_trip = round_trip and copy.rough_name == terrain.rough_name and copy.palette == terrain.palette
+	round_trip = round_trip and float(copy.cost_multipliers.get("raise", 0.0)) == 1.35
+	var legacy: TerrainModel = TerrainModelClass.new()
+	legacy.restore({"heights": terrain.heights, "surfaces": terrain.surfaces, "water_levels": terrain.water_levels, "holes": [], "objects": [], "next_id": 1})
+	var legacy_ok: bool = legacy.entrance == TerrainModelClass.DEFAULT_ENTRANCE
+	legacy_ok = legacy_ok and legacy.map_id == "cedar_house" and legacy.palette.size() == 7
+	legacy_ok = legacy_ok and float(legacy.cost_multipliers.get("raise", 0.0)) == 1.0
+	return _expect(round_trip and legacy_ok, "map snapshot fields did not round-trip or legacy defaults failed")
 
 func _expect(condition: bool, message: String) -> int:
 	if condition:

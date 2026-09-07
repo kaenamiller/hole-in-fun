@@ -4,14 +4,23 @@ The project is developed with Godot 4.7.2 on an Apple M2 Mac with 16 GB RAM. Sou
 
 ## Automated coverage
 
-- **Assets:** 41 catalog/model checks, including every facility and scenery asset, golfers, activity animation, carts, flags, model bounds and ground offsets.
-- **Shots:** fixed-seed reproducibility, skill profiles, trees, water recovery, putting and bounded rounds. A representative test hole averages 5.07 / 4.63 / 3.77 strokes for beginner / intermediate / expert.
-- **Terrain:** boundaries, reversible brushes and costs, flat water cells, snapshots, beauty and set combinations, separate walking/cart connectivity, bridge crossing, hole validity, mesh chunks and overlays.
-- **Simulation:** individual visits, groups, staff assignments, financial transactions and loans, calendar events, qualifying-event and quality gates, construction interruption, hole order, RNG continuity, and a full day on the real 18-hole terrain with 100 golfers admitted at once.
-- **Regressions:** partition-independent fixed simulation ticks, no fabricated routes across water, bridge reconnection, sandbox/physical event requirements, damaged-save backup recovery, a real starter-resort event through two complete days, and reconciliation of cash with all ledger transactions.
-- **Game integration:** main scene initialization, all eight UI tab callbacks, terrain editing, placement, undo/redo, new tee/green creation, shot analysis, and named save/load with active visitors. Tests use isolated save directories.
+- **Assets:** 60 catalog/model checks, including every facility and scenery asset, golfers, activity animation, carts, flags, model bounds and ground offsets.
+- **Shots:** fixed-seed reproducibility, skill profiles, trees, water recovery, putting and bounded rounds. Players choose aims from expected remaining strokes (pin vs layup vs carry) before the usual miss ellipse resolves the shot. 8 behavioral-tuning checks currently fail (see open items below).
+- **Terrain:** boundaries, reversible brushes and costs, flat water cells, snapshots, beauty and set combinations, separate walking/cart connectivity, bridge crossing, hole validity, mesh chunks and overlays, per-hole green ownership, OB/penalty zone classification, bunker depth, and procedural map generation. All passing.
+- **Simulation:** individual visits, groups, staff assignments, financial transactions and loans, calendar events, qualifying-event and quality gates, construction interruption, hole order, RNG continuity, pricing/marketing/memberships, and a congested real-terrain stress run. 129 of 133 checks pass; `SIM_TEST_ONLY=<names>` runs individual tests in under two minutes.
+- **Regressions:** partition-independent fixed simulation ticks, no fabricated routes across water, bridge reconnection, sandbox/physical event requirements, damaged-save backup recovery, a real starter-resort event through its full lifecycle, lodge stress drain, and reconciliation of cash with all ledger transactions. All passing.
+- **Game integration:** main scene initialization, all navigation tab callbacks, terrain editing, placement, undo/redo, new tee/green creation, shot analysis, map smoke tests, menu previews, and named save/load with active visitors. All passing.
 
-The full-course stress scenario is deliberately harsher than normal arrivals: all 100 guests arrive together. It verifies that completed rounds and closing-time departures resolve without stranded visitors; it does not require every congested visit to finish all 18 holes. The latest pre-packaging run completed 56 full visits and settled at day 2 with positive funds. A separate real open-day scenario produced a successful result with 75 attendees and 75 completed rounds.
+The stress scenario admits 12 four-balls at once (48 guests) on the real 3-hole starter terrain with arrivals suspended, and runs until the first completions land (~54,000 simulated seconds ≈ 68 calendar days under continuous play). Under the current calendar model there are no closing-time departures; visits resolve on their own.
+
+## Open items after the calendar rework
+
+The day model moved from a 600-minute operating window to continuous play (one calendar day = 800 sim-seconds; monthly settlement; seasonal grading; weather visuals). The following are tracked as known-open:
+
+1. **test_shots (8 failures):** behavioral tuning of the expected-value decision/metrics system — difficulty bands on short par 4s, water-guard decision splits, aim-near-pin targeting, `pace_minutes` on the FakeTerrain double, and lag-putt behavior. Mechanical bugs in the same area (green ownership fallback, OB boundary spans, PNPOLY ray-cast, paint order) are fixed and their tests pass.
+2. **test_simulation (4 failures):** analytics-landings spread across holes (sequential play + daily landing decay make multi-hole landings within short horizons unlikely), groundskeeper hole-recovery assertion, third-concurrent-project rejection, and the balk counter. All four are isolated contract checks; the systems themselves function.
+3. **Unverified at scale:** full-round real-time pacing (~15–16 real minutes estimated for 18 holes at 1x), course congestion under full demand (a saturated 3-hole starter fills the 200-guest cap with multi-week tee waits), and starter-economy margins (monthly revenue roughly break-even against wages + upkeep).
+4. **Balance notes:** analytics `landings` decay (0.7/day) is faster than the new round length suggests; event attendance on saturated small courses relies on the fortnight stall rule.
 
 ## Visual and desktop checks
 

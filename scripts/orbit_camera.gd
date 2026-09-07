@@ -4,7 +4,7 @@ extends Camera3D
 var focus = Vector3(248,0,238)
 var yaw = 0.30
 var distance = 550.0
-var elevation = 1.05
+var elevation = 0.85
 var drag_mode = 0
 var enabled = true
 
@@ -49,8 +49,8 @@ func handle_input(event: InputEvent) -> void:
 		elif drag_mode==2: yaw-=event.relative.x*0.006
 	elif event is InputEventPanGesture:
 		var viewport_height=get_viewport().get_visible_rect().size.y
-		focus-=global_transform.basis.x*event.delta.x*size/viewport_height
-		focus-=Vector3(sin(yaw),0,cos(yaw))*event.delta.y*size/viewport_height*1.5
+		focus+=global_transform.basis.x*event.delta.x*size/viewport_height*5.0
+		focus+=Vector3(sin(yaw),0,cos(yaw))*event.delta.y*size/viewport_height*7.5
 	elif event is InputEventMagnifyGesture:
 		if event.factor>1.0: size=maxf(28,size/event.factor)
 		elif event.factor<1.0: size=minf(1250,size/event.factor)
@@ -61,11 +61,11 @@ func _update_transform() -> void:
 	position=framed_focus+Vector3(sin(yaw)*distance, distance*elevation, cos(yaw)*distance)
 	look_at(framed_focus,Vector3.UP)
 
-func reset_view() -> void:
-	focus=Vector3(248,0,238)
+func reset_view(entrance: Vector3 = Vector3(64, 0, 64)) -> void:
+	focus = entrance + Vector3(184.0, 0.0, 174.0)
 	yaw=0.30
 	size=420
-	elevation=1.05
+	elevation=0.85
 	_update_transform()
 
 func ground_point(screen: Vector2, terrain: TerrainModel) -> Vector3:
