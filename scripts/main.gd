@@ -103,23 +103,36 @@ func _ready() -> void:
 	_sound=AudioStreamPlayer.new()
 	_sound.volume_db=master_volume_db
 	add_child(_sound)
-	_create_resort(false, "cedar_house", -1, true)
-	camera.focus=Vector3(310,0,305)
-	camera.size=470
 	ui=ResortUI.new()
 	add_child(ui)
 	ui.setup(self)
+	if _autoplay or _benchmark or "--smoke" in OS.get_cmdline_user_args():
+		_bootstrap_resort()
+		_finish_boot_modes()
+	else:
+		ui.show_loading("Preparing Cedar House…")
+		call_deferred("_bootstrap_resort")
+
+func _bootstrap_resort() -> void:
+	_create_resort(false, "cedar_house", -1, true)
+	camera.focus=Vector3(310,0,305)
+	camera.size=470
 	graphics.apply_to_game(self, false)
-	if _autoplay or _benchmark:menu_open=false
-	else:ui.show_menu()
+	if is_instance_valid(ui):
+		ui.finish_setup()
+	if _autoplay or _benchmark or "--smoke" in OS.get_cmdline_user_args():
+		menu_open=false
+	elif is_instance_valid(ui):
+		ui.show_menu()
 	notify("Welcome to Cedar House. Your first three holes are ready for play.")
+
+func _finish_boot_modes() -> void:
 	if _benchmark:
 		_create_resort(true, "pinewood_valley", -1, true, true)
 		camera.focus=Vector3(512,0,512)
 		camera.size=1100
 		for i in range(25):sim.admit_group(4)
 	if "--smoke" in OS.get_cmdline_user_args():
-		menu_open=false
 		_test_frames=120
 
 func _setup_light() -> void:
@@ -325,6 +338,9 @@ func new_game(sandbox_mode: bool, map_id: String, seed_value: int, starter: bool
 	var map_def: Dictionary = Catalog.map(map_id)
 	if map_def.is_empty():
 		map_def = Catalog.map("cedar_house")
+	if is_instance_valid(ui):
+		ui.show_loading("Building %s…" % str(map_def.get("name", "resort")))
+	await get_tree().process_frame
 	_create_resort(sandbox_mode, map_id, seed_value, starter)
 	save_name = str(map_def.get("name", "My resort"))
 	camera.reset_view(terrain.entrance)
@@ -335,6 +351,8 @@ func new_game(sandbox_mode: bool, map_id: String, seed_value: int, starter: bool
 		camera.focus = terrain.entrance + Vector3(126.0, 0.0, 116.0)
 	speed = 1
 	menu_open = false
+	if is_instance_valid(ui):
+		ui.hide_menu()
 	ui.show_tab("Terrain")
 	var map_name: String = str(map_def.get("name", "resort"))
 	notify("Resort ready. Build a clubhouse and one playable hole to welcome guests." if not starter else "%s is open. Design, inspect, or let the day unfold." % map_name)

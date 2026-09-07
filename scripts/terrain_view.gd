@@ -966,7 +966,11 @@ func _tree_shadow_instances() -> void:
 		var region := Vector2i(int(obj.pos.x/128),int(obj.pos.z/128))
 		var key: String = str(region)+str(pine)+":"+str(variant)
 		if not groups.has(key): groups[key]={"pine":pine,"variant":variant,"transforms":[]}
-		groups[key].transforms.append(instance_root.global_transform.affine_inverse() * source.global_transform)
+		var record: Dictionary = obj
+		var pos: Vector3 = record.pos
+		pos.y = model.height_at(pos)
+		var shadow_transform := Transform3D(Basis.from_euler(Vector3(0, float(record.get("rotation", 0.0)), 0)), pos)
+		groups[key].transforms.append(shadow_transform)
 	for group in groups.values():
 		var mm := MultiMesh.new()
 		mm.transform_format=MultiMesh.TRANSFORM_3D

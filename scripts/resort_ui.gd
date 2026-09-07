@@ -137,6 +137,8 @@ func setup(controller) -> void:
 	_build_pause_banner()
 	root.resized.connect(_apply_layout)
 	_apply_layout()
+
+func finish_setup() -> void:
 	show_tab("Terrain")
 
 func _make_theme() -> Theme:
@@ -578,7 +580,7 @@ func _build_workspace() -> void:
 	overlay_option.custom_minimum_size.x = 132
 	for overlay_id in game.OVERLAY_IDS:
 		overlay_option.add_item(_overlay_label(overlay_id))
-	overlay_option.selected = maxi(0, game.OVERLAY_IDS.find(game.world.overlay))
+	overlay_option.selected = maxi(0, game.OVERLAY_IDS.find(game.world.overlay if game.world != null else "none"))
 	overlay_option.item_selected.connect(func(index: int): game.set_overlay(game.OVERLAY_IDS[index]))
 	overlay_option.tooltip_text = "Data overlay on the land (O cycles)"
 	view_inner.add_child(overlay_option)
@@ -3007,6 +3009,32 @@ static func format_money(value: float) -> String:
 	return output
 
 # ---------------------------------------------------------------- main menu
+
+func show_loading(message: String) -> void:
+	game.menu_open = true
+	_close_reports()
+	_close_system()
+	if is_instance_valid(menu):
+		menu.queue_free()
+	menu = Control.new()
+	menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(menu)
+	var shade = ColorRect.new()
+	shade.color = Color(0.06, 0.14, 0.10, 0.54)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu.add_child(shade)
+	var center = CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu.add_child(center)
+	var card_panel = PanelContainer.new()
+	card_panel.custom_minimum_size = Vector2(minf(420.0, maxf(280.0, root.size.x - 40.0)), 0)
+	card_panel.add_theme_stylebox_override("panel", box(PAPER, 22, 32))
+	center.add_child(card_panel)
+	var v = VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	card_panel.add_child(v)
+	v.add_child(label("Hole in Fun", 32, INK))
+	v.add_child(label(message, 16, MUTED))
 
 func show_menu() -> void:
 	game.menu_open = true
